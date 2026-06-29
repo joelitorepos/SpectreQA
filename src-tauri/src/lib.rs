@@ -206,90 +206,26 @@ fn delete_project_dir(app: tauri::AppHandle, project_id: String) -> Result<(), S
  
 #[tauri::command]
 async fn run_project_commands(command: String, cwd: String) -> Result<(), String> {
-    use tokio::net::TcpStream;
-    use tokio::process::Command;
-    use tokio::time::{sleep, timeout, Duration};
- 
-    let cwd_path = std::path::PathBuf::from(&cwd);
-    if !cwd_path.exists() {
-        return Err(format!("La ruta no existe: {}", cwd));
-    }
- 
-    if command.trim().is_empty() {
-        return Ok(());
-    }
- 
-    // Intentar extraer el puerto del comando para verificar si ya hay algo escuchando.
-    // Busca patrones comunes: "8000", ":8000", "PORT=8000", etc.
-    let port_hint = extract_port_from_command(&command);
- 
-    if let Some(port) = port_hint {
-        if is_port_in_use(port).await {
-            println!("[GlassTest] Puerto {} ya en uso, asumiendo servidor activo.", port);
-            return Ok(());
-        }
-    }
- 
-    let child = if cfg!(target_os = "windows") {
-        Command::new("cmd")
-            .args(["/C", &command])
-            .current_dir(&cwd_path)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-    } else {
-        Command::new("sh")
-            .args(["-c", &command])
-            .current_dir(&cwd_path)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-    };
- 
-    let mut child = match child {
-        Ok(c) => c,
-        Err(e) => return Err(format!("No se pudo lanzar '{}': {}", command, e)),
-    };
- 
-    // Esperar hasta 3 segundos a que el proceso muera (si muere, es error).
-    // Si sigue vivo después de ese tiempo, asumimos que arrancó bien.
-    sleep(Duration::from_millis(2000)).await;
- 
-    match child.try_wait() {
-        Ok(Some(status)) => {
-            // El proceso terminó — leer stderr para el mensaje de error
-            let stderr = if let Some(mut err) = child.stderr.take() {
-                use tokio::io::AsyncReadExt;
-                let mut buf = String::new();
-                // Leer con timeout para no bloquearse
-                let _ = timeout(Duration::from_millis(500), err.read_to_string(&mut buf)).await;
-                buf.trim().to_string()
-            } else {
-                String::new()
-            };
- 
-            // Si el error es "puerto en uso", no es un error real —
-            // significa que ya había un servidor corriendo.
-            if stderr.contains("Address already in use")
-                || stderr.contains("Only one usage of each socket")
-                || stderr.contains("address already in use")
-            {
-                println!("[GlassTest] Puerto ya en uso al lanzar '{}', continuando.", command);
-                return Ok(());
-            }
- 
-            let detail = if stderr.is_empty() {
-                format!("código de salida: {}", status)
-            } else {
-                // Truncar stderr largo para que el mensaje sea legible en la UI
-                let lines: Vec<&str> = stderr.lines().take(3).collect();
-                lines.join(" | ")
-            };
- 
-            Err(format!("'{}' terminó inesperadamente: {}", command, detail))
-        }
-        Ok(None) => Ok(()), // proceso corriendo, todo bien
-        Err(e) => Err(format!("Error revisando proceso: {}", e)),
+#[cfg(target_os = "windows")]
+    let (shell, arg) = ("cmd", "/C");
+
+    #[cfg(not(target_os = "windows"))]
+    let (shell, arg) = ("sh", "-c");
+
+    let mut cmd = std::process::Command::new(shell);
+    
+    cmd.arg(arg)
+       .arg(&command)
+       .current_dir(&cwd)
+       .stdout(std::process::Stdio::null())
+       .stderr(std::process::Stdio::null())
+       .env_remove("PYTHONHOME")
+       .env_remove("PYTHONPATH")
+       .env_remove("LD_LIBRARY_PATH");
+
+    match cmd.spawn() {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("Error: {}", e)),
     }
 }
  
