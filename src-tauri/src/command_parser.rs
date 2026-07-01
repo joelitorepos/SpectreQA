@@ -54,7 +54,7 @@ pub fn sanitize_ollama_response(raw: &str) -> Result<OllamaResponse, String> {
         .map(|s| clean_command(&s))
         .collect();
 
-    println!("[GlassTest] Parseo exitoso - thought: {}, status: {}, commands: {:?}", thought, status, commands);
+    println!("[SpectreQA] Parseo exitoso - thought: {}, status: {}, commands: {:?}", thought, status, commands);
 
     Ok(OllamaResponse { thought, status, commands })
 }
@@ -72,7 +72,7 @@ pub fn validate_commands(commands: &[String]) -> Vec<String> {
             if is_valid_command(cmd) {
                 Some(cmd.to_string())
             } else {
-                eprintln!("[GlassTest] Comando inválido descartado: {}", cmd);
+                eprintln!("[SpectreQA] Comando inválido descartado: {}", cmd);
                 None
             }
         })

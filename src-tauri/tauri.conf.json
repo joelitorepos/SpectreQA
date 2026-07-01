@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "GlassTest",
+  "productName": "SpectreQA",
   "version": "0.1.0",
-  "identifier": "com.joelito.glasstest",
+  "identifier": "com.joelito.spectreqa",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [{
-      "title": "GlassTest",
+      "title": "SpectreQA",
       "width": 1280,
       "height": 800,
       "maximized": true,

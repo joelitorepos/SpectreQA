@@ -15,7 +15,7 @@ const Sidebar = () => {
           <div className="w-7 h-7 rounded-lg bg-[#534AB7] flex items-center justify-center text-white text-sm">
             ⬡
           </div>
-          <span className="font-semibold text-slate-800 text-[15px]">Auditly</span>
+          <span className="font-semibold text-slate-800 text-[15px]">SpectreQA</span>
         </div>
       </div>
 

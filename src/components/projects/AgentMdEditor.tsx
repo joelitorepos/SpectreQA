@@ -119,8 +119,8 @@ const AgentMdEditor = ({ project, onClose }: AgentMdEditorProps) => {
         <div className="px-6 py-3 border-t border-slate-100 flex items-center justify-between shrink-0">
           <span className="text-xs text-slate-400 font-mono">
             {project.env === 'local'
-              ? `~/.local/share/glasstest/projects/${project.id}/AGENT.md`
-              : `AppData/glasstest/projects/${project.id}/AGENT.md`}
+              ? `~/.local/share/spectreqa/projects/${project.id}/AGENT.md`
+              : `AppData/spectreqa/projects/${project.id}/AGENT.md`}
           </span>
           <span className="text-xs text-slate-400">
             {content.length} caracteres

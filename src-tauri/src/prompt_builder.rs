@@ -9,7 +9,7 @@ use crate::session::PhaseRecord;
  *   {AGENT.md}              — objetivo general del proyecto
  *   {HISTORIAL_DE_FASES}    — fases anteriores formateadas
  *   {NUMERO_FASE}           — número de fase actual
- *   {JSON_SANITIZADO_DEL_DOM} — snapshot DOM compacto
+ *   {JSON_SANITIZADO_DEL_DOM} — snapshot DOM compacto (con inputs ofuscados)
  */
 pub fn build_prompt(
     agent_md: &str,
@@ -20,7 +20,7 @@ pub fn build_prompt(
     let template = include_str!("../resources/prompt.txt");
 
     let history_str = format_history(history);
-    let dom_str = serialize_dom(dom);
+    let dom_str = serialize_dom(dom); // Ahora ofusca los inputs internamente
 
     let prompt = template
         .replace("{AGENT.md}", agent_md.trim())
@@ -29,23 +29,15 @@ pub fn build_prompt(
         .replace("{JSON_SANITIZADO_DEL_DOM}", &dom_str);
 
     let prompt_preview = prompt.chars().take(100).collect::<String>();
-    println!("[GlassTest] Prompt generado para fase {}:\n{}\n", phase_num, prompt_preview);
+    println!("[SpectreQA] Prompt generado para fase {}:\n{}\n", phase_num, prompt_preview);
 
-    println!("[GlassTest] Prompt completo:\n{}\n", prompt);
+    println!("[SpectreQA] Prompt completo:\n{}\n", prompt);
     prompt
 }
 
 /**
  * Formatea el historial de fases anteriores en texto legible para la IA.
  * Si no hay historial, devuelve un string indicando que es la primera fase.
- * Ejemplo de salida:
- *   Fase 0:
- *     Thought: Found login form, filling credentials.
- *     Status: CONTINUE
- *     Commands:
- *       - @Write input-text-1-login "admin"
- *       - @Write input-text-2-login "1234"
- *       - @Click button-1-login
  */
 fn format_history(history: &[PhaseRecord]) -> String {
     if history.is_empty() {
@@ -79,9 +71,81 @@ fn format_history(history: &[PhaseRecord]) -> String {
 }
 
 /**
- * Serializa el snapshot DOM a JSON compacto (sin espacios extra).
- * Compacto para ahorrar tokens — la IA no necesita pretty print.
+ * Serializa el snapshot DOM a JSON compacto, pero antes ofusca el contenido
+ * de los inputs para proteger la privacidad.
  */
 fn serialize_dom(dom: &Value) -> String {
-    dom.to_string()
+    // Clonamos para no mutar el original (que podría usarse en otro lado)
+    let mut dom_clone = dom.clone();
+    // Ofuscamos los inputs en la copia
+    obfuscate_dom_inputs(&mut dom_clone);
+    // Serializamos a JSON compacto
+    dom_clone.to_string()
+}
+
+/**
+ * Función recursiva que recorre el árbol JSON y reemplaza el contenido
+ * de los nodos INPUT por indicadores genéricos.
+ * 
+ * Criterios de detección:
+ *   - Objeto con campo "tagName" igual a "INPUT" (insensible a mayúsculas)
+ *   - O bien, si el campo "id" contiene la palabra "input" (para capturar variantes)
+ * 
+ * Se ignoran los LABEL y cualquier otro elemento.
+ */
+fn obfuscate_dom_inputs(dom: &mut Value) {
+    match dom {
+        Value::Object(map) => {
+            // Primero, comprobamos si este objeto es un INPUT
+            let is_input = if let Some(tag) = map.get("tagName").and_then(|v| v.as_str()) {
+                tag.eq_ignore_ascii_case("INPUT")
+            } else if let Some(id) = map.get("id").and_then(|v| v.as_str()) {
+                // Si no tiene tagName, pero el id contiene "input", lo tratamos como input
+                id.to_lowercase().contains("input")
+            } else {
+                false
+            };
+
+            // Si es input, ofuscamos su campo "content" (o "value" si existiera)
+            if is_input {
+                if let Some(content) = map.get_mut("content") {
+                    if let Some(s) = content.as_str() {
+                        let new_content = if s.is_empty() {
+                            "[empty]".to_string()
+                        } else {
+                            let len = s.chars().count(); // caracteres, no bytes
+                            format!("[filled:{}chars]", len)
+                        };
+                        *content = Value::String(new_content);
+                    }
+                }
+                // Si el campo se llama "value" en lugar de "content", también lo manejamos
+                if let Some(value) = map.get_mut("value") {
+                    if let Some(s) = value.as_str() {
+                        let new_value = if s.is_empty() {
+                            "[empty]".to_string()
+                        } else {
+                            let len = s.chars().count();
+                            format!("[filled:{}chars]", len)
+                        };
+                        *value = Value::String(new_value);
+                    }
+                }
+                // No procesamos más los hijos, porque un input no suele tener hijos
+                return;
+            }
+
+            // Si no es input, procesamos recursivamente cada valor del objeto
+            for (_, value) in map.iter_mut() {
+                obfuscate_dom_inputs(value);
+            }
+        }
+        Value::Array(arr) => {
+            // Procesamos cada elemento del array
+            for item in arr.iter_mut() {
+                obfuscate_dom_inputs(item);
+            }
+        }
+        _ => {} // Otros tipos (string, número, etc.) no se procesan
+    }
 }

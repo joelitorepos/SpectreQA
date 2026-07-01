@@ -110,6 +110,6 @@ async function setExtensionActiveProject(projectId: string | null): Promise<void
       payload: { project_id: projectId },
     });
   } catch (e) {
-    console.error('[GlassTest] Error enviando SET_ACTIVE_PROJECT a la extensión:', e);
+    console.error('[SpectreQA] Error enviando SET_ACTIVE_PROJECT a la extensión:', e);
   }
 }

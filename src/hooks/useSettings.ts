@@ -85,7 +85,7 @@ async function syncAiConfig(config: AIConfig): Promise<void> {
       baseUrl: config.baseUrl,
     });
   } catch (e) {
-    console.error('[GlassTest] Error sincronizando AIConfig con Rust:', e);
+    console.error('[SpectreQA] Error sincronizando AIConfig con Rust:', e);
   }
 }
 

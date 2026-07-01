@@ -17,5 +17,5 @@
  */
 
 fn main() {
-    glasstest_lib::run()
+    spectreqa_lib::run()
 }

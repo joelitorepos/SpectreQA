@@ -24,7 +24,7 @@ use crate::command_parser;
 
 const BASE_PORT: u16 = 9999;
 const MAX_PORT_TRIES: u16 = 10;
-const ALLOWED_EXTENSION_ID: &str = "ldllbpiphgiidngjmdolbaglenjamojg";
+const ALLOWED_EXTENSION_ID: &str = "eonjhhhdhlmlhbcmccenadolnkpingpb";
 
 pub static EXTENSION_CONNECTED: AtomicBool = AtomicBool::new(false);
 
@@ -53,11 +53,11 @@ pub async fn start(
 
     let listener = match TcpListener::bind(&addr).await {
         Ok(l) => {
-            println!("[GlassTest] WS server escuchando en ws://127.0.0.1:{}", port);
+            println!("[SpectreQA] WS server escuchando en ws://127.0.0.1:{}", port);
             l
         }
         Err(e) => {
-            eprintln!("[GlassTest] No se pudo iniciar el WS server: {}", e);
+            eprintln!("[SpectreQA] No se pudo iniciar el WS server: {}", e);
             return;
         }
     };
@@ -95,17 +95,17 @@ async fn handle_connection(
     let ws_stream = match ws_stream {
         Ok(ws) => ws,
         Err(e) => {
-            eprintln!("[GlassTest] Error en WS handshake desde {}: {}", peer_addr, e);
+            eprintln!("[SpectreQA] Error en WS handshake desde {}: {}", peer_addr, e);
             return;
         }
     };
 
     if !origin_ok {
-        eprintln!("[GlassTest] Conexión rechazada desde {} (origen no permitido)", peer_addr);
+        eprintln!("[SpectreQA] Conexión rechazada desde {} (origen no permitido)", peer_addr);
         return;
     }
 
-    println!("[GlassTest] Extensión conectada desde {}", peer_addr);
+    println!("[SpectreQA] Extensión conectada desde {}", peer_addr);
     EXTENSION_CONNECTED.store(true, Ordering::Relaxed);
 
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
@@ -117,7 +117,7 @@ async fn handle_connection(
             msg = ws_receiver.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        println!("[GlassTest] Mensaje RAW recibido: {}", text);
+                        println!("[SpectreQA] Mensaje RAW recibido: {}", text);
                         match serde_json::from_str::<WsMessage>(&text) {
                             Ok(parsed) => {
                                 match parsed.msg_type.as_str() {
@@ -134,7 +134,7 @@ async fn handle_connection(
                                                 json!({ "type": "HANDSHAKE_ACK", "status": "ok" })
                                                     .to_string().into()
                                             )).await;
-                                            println!("[GlassTest] Handshake OK (ext: {})", ext_id);
+                                            println!("[SpectreQA] Handshake OK (ext: {})", ext_id);
                                         } else {
                                             let _ = ws_sender.send(Message::Text(
                                                 json!({
@@ -143,7 +143,7 @@ async fn handle_connection(
                                                     "reason": "extension ID no permitido"
                                                 }).to_string().into()
                                             )).await;
-                                            eprintln!("[GlassTest] Handshake rechazado (ext: {})", ext_id);
+                                            eprintln!("[SpectreQA] Handshake rechazado (ext: {})", ext_id);
                                             break;
                                         }
                                     }
@@ -153,9 +153,9 @@ async fn handle_connection(
                                         )).await;
                                     }
                                     "START_TEST" if handshake_done => {
-                                        println!("[GlassTest] START_TEST recibido, procesando...");
+                                        println!("[SpectreQA] START_TEST recibido, procesando...");
                                         handle_start_test(&parsed.payload, &state, &broadcast_tx).await;
-                                        println!("[GlassTest] handle_start_test completado, TEST_STARTED enviado al broadcast");
+                                        println!("[SpectreQA] handle_start_test completado, TEST_STARTED enviado al broadcast");
                                     }
                                     "DOM_SNAPSHOT" if handshake_done => {
                                         handle_dom_snapshot(&parsed.payload, &state, &broadcast_tx).await;
@@ -167,22 +167,22 @@ async fn handle_connection(
                                         let _ = app.emit("audit-event", &parsed.payload);
                                     }
                                     _ if !handshake_done => {
-                                        eprintln!("[GlassTest] Mensaje recibido sin handshake previo, ignorando.");
+                                        eprintln!("[SpectreQA] Mensaje recibido sin handshake previo, ignorando.");
                                     }
                                     _ => {}
                                 }
                             }
-                            Err(e) => eprintln!("[GlassTest] JSON inválido: {}", e),
+                            Err(e) => eprintln!("[SpectreQA] JSON inválido: {}", e),
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => {
                         EXTENSION_CONNECTED.store(false, Ordering::Relaxed);
-                        println!("[GlassTest] Extensión desconectada ({})", peer_addr);
+                        println!("[SpectreQA] Extensión desconectada ({})", peer_addr);
                         break;
                     }
                     Some(Err(e)) => {
                         EXTENSION_CONNECTED.store(false, Ordering::Relaxed);
-                        eprintln!("[GlassTest] Error WS: {}", e);
+                        eprintln!("[SpectreQA] Error WS: {}", e);
                         break;
                     }
                     _ => {}
@@ -233,7 +233,7 @@ async fn handle_start_test(
         }
     };
 
-    println!("[GlassTest] handle_start_test: project_id = {}", project_id);
+    println!("[SpectreQA] handle_start_test: project_id = {}", project_id);
 
     let agent_md = match storage::read_agent_md(&projects_base, &project_id) {
         Ok(content) => content,
@@ -245,13 +245,13 @@ async fn handle_start_test(
 
     // Siempre resetear el historial al iniciar una nueva prueba
     if let Err(e) = storage::reset_history(&projects_base, &project_id) {
-        eprintln!("[GlassTest] Error reseteando historial: {}", e);
+        eprintln!("[SpectreQA] Error reseteando historial: {}", e);
     } else {
-        println!("[GlassTest] Historial resetado correctamente para proyecto: {}", project_id);
+        println!("[SpectreQA] Historial resetado correctamente para proyecto: {}", project_id);
     }
 
     let history = storage::read_respuestas(&projects_base, &project_id).unwrap_or_default();
-    println!("[GlassTest] Historial cargado: {} fases", history.len());
+    println!("[SpectreQA] Historial cargado: {} fases", history.len());
 
     let session = TestSession::new(project_id.clone(), agent_md, history);
     {
@@ -259,16 +259,16 @@ async fn handle_start_test(
         *s = Some(session);
     }
 
-    println!("[GlassTest] Sesión iniciada para proyecto: {}", project_id);
+    println!("[SpectreQA] Sesión iniciada para proyecto: {}", project_id);
 
     let ack = json!({
         "type": "TEST_STARTED",
         "project_id": project_id
     });
-    println!("[GlassTest] Enviando TEST_STARTED al broadcast. Suscriptores activos: {}", broadcast_tx.receiver_count());
+    println!("[SpectreQA] Enviando TEST_STARTED al broadcast. Suscriptores activos: {}", broadcast_tx.receiver_count());
     let result = broadcast_tx.send(ack.to_string());
-    println!("[GlassTest] Resultado del send: {:?}", result);
-    println!("[GlassTest] handle_start_test completado, TEST_STARTED enviado al broadcast");
+    println!("[SpectreQA] Resultado del send: {:?}", result);
+    println!("[SpectreQA] handle_start_test completado, TEST_STARTED enviado al broadcast");
 }
 
 async fn handle_dom_snapshot(
@@ -276,19 +276,19 @@ async fn handle_dom_snapshot(
     state: &Arc<AppState>,
     broadcast_tx: &Arc<Sender>,
 ) {
-    println!("[GlassTest] handle_dom_snapshot - payload recibido: {}", payload);
+    println!("[SpectreQA] handle_dom_snapshot - payload recibido: {}", payload);
 
     // Extraer elements (dentro de payload o en raíz)
     let elements = if let Some(inner) = payload.get("payload") {
         if let Some(e) = inner.get("elements") {
-            println!("[GlassTest] elements encontrado dentro de payload");
+            println!("[SpectreQA] elements encontrado dentro de payload");
             e.clone()
         } else {
             send_error(broadcast_tx, "DOM_SNAPSHOT: 'elements' no encontrado dentro de payload");
             return;
         }
     } else if let Some(e) = payload.get("elements") {
-        println!("[GlassTest] elements encontrado en la raíz");
+        println!("[SpectreQA] elements encontrado en la raíz");
         e.clone()
     } else {
         send_error(broadcast_tx, "DOM_SNAPSHOT: mensaje sin campo 'elements'");
@@ -325,7 +325,7 @@ async fn handle_dom_snapshot(
         }
     };
 
-    println!("[GlassTest] Procesando DOM_SNAPSHOT para Fase {} (URL: {})", current_phase, url);
+    println!("[SpectreQA] Procesando DOM_SNAPSHOT para Fase {} (URL: {})", current_phase, url);
 
     // Guardar la URL actual en la sesión (si no existe)
     if session.last_url.is_none() {
@@ -345,7 +345,7 @@ async fn handle_dom_snapshot(
     });
 
     if (is_logged_in || !has_inputs) && current_phase > 0 {
-        println!("[GlassTest] Objetivo cumplido (login exitoso). Enviando SUCCESS.");
+        println!("[SpectreQA] Objetivo cumplido (login exitoso). Enviando SUCCESS.");
         let msg = json!({
             "type": "EXECUTE_PHASE",
             "payload": {
@@ -378,7 +378,7 @@ async fn handle_dom_snapshot(
         let exceeded = session.register_no_change();
         if exceeded {
             println!(
-                "[GlassTest] DOM estancado tras {} reintentos en Fase {}. Terminando.",
+                "[SpectreQA] DOM estancado tras {} reintentos en Fase {}. Terminando.",
                 session.no_change_retries, current_phase
             );
             let msg = json!({
@@ -394,7 +394,7 @@ async fn handle_dom_snapshot(
             return;
         }
         println!(
-            "[GlassTest] DOM sin cambios en Fase {}. Reintento {}/3",
+            "[SpectreQA] DOM sin cambios en Fase {}. Reintento {}/3",
             current_phase, session.no_change_retries
         );
         return;
@@ -404,7 +404,7 @@ async fn handle_dom_snapshot(
 
     // Guardar snapshot
     if let Err(e) = storage::append_mapa(&projects_base, &session.project_id, elements.clone()) {
-        eprintln!("[GlassTest] Error guardando mapa fase {}: {}", current_phase, e);
+        eprintln!("[SpectreQA] Error guardando mapa fase {}: {}", current_phase, e);
     }
     session.set_last_dom(elements.clone());
 
@@ -429,7 +429,7 @@ async fn handle_dom_snapshot(
     };
 
     println!(
-        "[GlassTest] Llamando a IA (provider: {}, modelo: {}, fase {})...",
+        "[SpectreQA] Llamando a IA (provider: {}, modelo: {}, fase {})...",
         ai_config.provider, ai_config.model, current_phase
     );
 
@@ -443,7 +443,7 @@ async fn handle_dom_snapshot(
         }
     };
 
-    println!("[GlassTest] Respuesta cruda de IA (fase {}):\n{}\n", current_phase, raw_response);
+    println!("[SpectreQA] Respuesta cruda de IA (fase {}):\n{}\n", current_phase, raw_response);
 
     let mut session_guard = state.test_session.lock().await;
     let session = match session_guard.as_mut() {
@@ -465,7 +465,7 @@ async fn handle_dom_snapshot(
     let valid_commands = command_parser::validate_commands(&parsed.commands);
 
     println!(
-        "[GlassTest] Fase {}: status={}, commands={}",
+        "[SpectreQA] Fase {}: status={}, commands={}",
         current_phase, parsed.status, valid_commands.len()
     );
 
@@ -484,10 +484,10 @@ async fn handle_dom_snapshot(
         };
         session.add_phase(record.clone());
         if let Err(e) = storage::append_respuesta(&projects_base, &session.project_id, &record) {
-            eprintln!("[GlassTest] Error guardando respuesta fase {}: {}", current_phase, e);
+            eprintln!("[SpectreQA] Error guardando respuesta fase {}: {}", current_phase, e);
         }
     } else {
-        println!("[GlassTest] Registro duplicado ignorado para fase {}", current_phase);
+        println!("[SpectreQA] Registro duplicado ignorado para fase {}", current_phase);
     }
 
     // Avanzar la fase interna
@@ -512,13 +512,13 @@ async fn handle_test_status_update(payload: &Value, state: &Arc<AppState>) {
         .get("status")
         .and_then(|v| v.as_str())
         .unwrap_or("UNKNOWN");
-    println!("[GlassTest] Prueba terminada con status: {}", status);
+    println!("[SpectreQA] Prueba terminada con status: {}", status);
     let mut session = state.test_session.lock().await;
     *session = None;
 }
 
 fn send_error(broadcast_tx: &Arc<Sender>, message: &str) {
-    eprintln!("[GlassTest] Error enviado a la extensión: {}", message);
+    eprintln!("[SpectreQA] Error enviado a la extensión: {}", message);
     let msg = json!({
         "type": "EXECUTE_PHASE",
         "payload": {

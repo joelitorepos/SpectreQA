@@ -81,7 +81,7 @@ async fn set_ai_config(
     base_url: String,
 ) -> Result<(), String> {
     let mut config = state.ai_config.lock().await;
-    println!("[GlassTest] AI config actualizada: provider={}, model={}", provider, model);
+    println!("[SpectreQA] AI config actualizada: provider={}, model={}", provider, model);
     *config = AIConfig { provider, model, api_key, base_url };
     Ok(())
 }
@@ -95,7 +95,7 @@ async fn set_active_project(
     project_id: String,
 ) -> Result<(), String> {
     let mut active = state.active_project_id.lock().await;
-    println!("[GlassTest] Proyecto activo: {}", project_id);
+    println!("[SpectreQA] Proyecto activo: {}", project_id);
     *active = Some(project_id);
     Ok(())
 }
@@ -111,7 +111,7 @@ async fn clear_active_project(
     *active = None;
     let mut session = state.test_session.lock().await;
     *session = None;
-    println!("[GlassTest] Proyecto activo limpiado.");
+    println!("[SpectreQA] Proyecto activo limpiado.");
     Ok(())
 }
 
@@ -121,7 +121,7 @@ async fn send_to_extension(
     message_type: String,
     payload: serde_json::Value,
 ) -> Result<(), String> {
-    println!("[GlassTest] send_to_extension: type={}", message_type);
+    println!("[SpectreQA] send_to_extension: type={}", message_type);
     let msg = serde_json::json!({ "type": message_type, "payload": payload }).to_string();
     state.event_tx.send(msg).map_err(|e| e.to_string())?;
     Ok(())
