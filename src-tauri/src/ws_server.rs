@@ -14,17 +14,18 @@ use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::accept_hdr_async;
 
-use crate::{AppState, AIConfig};
+use crate::AppState;
 use crate::session::{PhaseRecord, TestSession};
 use crate::storage;
 use crate::dom_analyzer;
 use crate::prompt_builder;
 use crate::ai_client;
 use crate::command_parser;
+use crate::error_detector;
 
 const BASE_PORT: u16 = 9999;
 const MAX_PORT_TRIES: u16 = 10;
-const ALLOWED_EXTENSION_ID: &str = "eonjhhhdhlmlhbcmccenadolnkpingpb";
+const ALLOWED_EXTENSION_ID: &str = "llcalbmodinmjlmcdnlhpcddppacddmc";
 
 pub static EXTENSION_CONNECTED: AtomicBool = AtomicBool::new(false);
 
@@ -166,6 +167,9 @@ async fn handle_connection(
                                     "AUDIT_EVENT" if handshake_done => {
                                         let _ = app.emit("audit-event", &parsed.payload);
                                     }
+                                    "CLIENT_CONSOLE_ERROR" if handshake_done => {
+                                        handle_client_console_error(&parsed.payload, &state, &broadcast_tx).await;
+                                    }
                                     _ if !handshake_done => {
                                         eprintln!("[SpectreQA] Mensaje recibido sin handshake previo, ignorando.");
                                     }
@@ -243,17 +247,8 @@ async fn handle_start_test(
         }
     };
 
-    // Siempre resetear el historial al iniciar una nueva prueba
-    if let Err(e) = storage::reset_history(&projects_base, &project_id) {
-        eprintln!("[SpectreQA] Error reseteando historial: {}", e);
-    } else {
-        println!("[SpectreQA] Historial resetado correctamente para proyecto: {}", project_id);
-    }
-
-    let history = storage::read_respuestas(&projects_base, &project_id).unwrap_or_default();
-    println!("[SpectreQA] Historial cargado: {} fases", history.len());
-
-    let session = TestSession::new(project_id.clone(), agent_md, history);
+    // Crear nueva sesión con historial vacío
+    let session = TestSession::new(project_id.clone(), agent_md, Vec::new());
     {
         let mut s = state.test_session.lock().await;
         *s = Some(session);
@@ -269,6 +264,37 @@ async fn handle_start_test(
     let result = broadcast_tx.send(ack.to_string());
     println!("[SpectreQA] Resultado del send: {:?}", result);
     println!("[SpectreQA] handle_start_test completado, TEST_STARTED enviado al broadcast");
+}
+
+async fn handle_client_console_error(
+    payload: &Value,
+    state: &Arc<AppState>,
+    broadcast_tx: &Arc<Sender>,
+) {
+    let command = payload.get("command").and_then(|v| v.as_str()).unwrap_or("?");
+    let first_error = payload
+        .get("errors")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|e| e.get("message"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("(sin detalle)");
+
+    println!("[SpectreQA] console.error reportado por el cliente tras {}: {}", command, first_error);
+
+    let msg = json!({
+        "type": "EXECUTE_PHASE",
+        "payload": {
+            "phase": 0,
+            "thought": format!("La página emitió un console.error tras ejecutar {}: {}", command, first_error),
+            "status": "FAILURE",
+            "commands": []
+        }
+    });
+    let _ = broadcast_tx.send(msg.to_string());
+
+    let mut session = state.test_session.lock().await;
+    *session = None;
 }
 
 async fn handle_dom_snapshot(
@@ -294,6 +320,29 @@ async fn handle_dom_snapshot(
         send_error(broadcast_tx, "DOM_SNAPSHOT: mensaje sin campo 'elements'");
         return;
     };
+
+    // ================================================================
+    // MIDDLEWARE DE DETECCIÓN DE ERROR EN LABELS
+    // ================================================================
+    if let Some((label_id, label_content)) = error_detector::detect_label_error(&elements) {
+        println!(
+            "[SpectreQA] Error detectado en label '{}': {}",
+            label_id, label_content
+        );
+        let msg = json!({
+            "type": "EXECUTE_PHASE",
+            "payload": {
+                "phase": 0,
+                "thought": format!("Se detectó un mensaje de error en la interfaz ('{}'): {}", label_id, label_content),
+                "status": "FAILURE",
+                "commands": []
+            }
+        });
+        let _ = broadcast_tx.send(msg.to_string());
+        let mut session_guard = state.test_session.lock().await;
+        *session_guard = None;
+        return;
+    }
 
     // Extraer phase y url
     let current_phase = if let Some(inner) = payload.get("payload") {
@@ -327,40 +376,11 @@ async fn handle_dom_snapshot(
 
     println!("[SpectreQA] Procesando DOM_SNAPSHOT para Fase {} (URL: {})", current_phase, url);
 
-    // Guardar la URL actual en la sesión (si no existe)
-    if session.last_url.is_none() {
-        session.last_url = Some(url.clone());
-    }
-
-    // Detectar si el objetivo se ha cumplido (cambio de página o desaparición de inputs)
-    let is_logged_in = if let Some(prev_url) = &session.last_url {
-        prev_url != &url && url.contains("welcome") // Ajusta según tu app
-    } else {
-        false
-    };
-
-    // También comprobar si ya no hay elementos que contengan "input" en su ID
-    let has_inputs = elements.as_array().map_or(false, |arr| {
-        arr.iter().any(|el| el.get("id").and_then(|id| id.as_str()).map_or(false, |id| id.contains("input")))
-    });
-
-    if (is_logged_in || !has_inputs) && current_phase > 0 {
-        println!("[SpectreQA] Objetivo cumplido (login exitoso). Enviando SUCCESS.");
-        let msg = json!({
-            "type": "EXECUTE_PHASE",
-            "payload": {
-                "phase": current_phase + 1,
-                "thought": "Login successful. Test completed.",
-                "status": "SUCCESS",
-                "commands": []
-            }
-        });
-        let _ = broadcast_tx.send(msg.to_string());
-        *session_guard = None; // Limpiar sesión
-        return;
-    }
-
-    // Actualizar la URL guardada
+    // Guardar la URL anterior y actual para contexto de la IA
+    let previous_url = session.last_url.clone();
+    let current_url = url.clone();
+    
+    // Actualizar la URL actual en la sesión
     session.last_url = Some(url);
 
     // Validar si el DOM ha cambiado
@@ -374,6 +394,9 @@ async fn handle_dom_snapshot(
         true
     };
 
+    // ================================================================
+    // FIX DEL "MODO ZOMBIE"
+    // ================================================================
     if !dom_changed {
         let exceeded = session.register_no_change();
         if exceeded {
@@ -385,27 +408,39 @@ async fn handle_dom_snapshot(
                 "type": "EXECUTE_PHASE",
                 "payload": {
                     "phase": current_phase,
-                    "thought": "The DOM has not changed after multiple attempts. Aborting test execution.",
+                    "thought": "El DOM no cambió tras varios intentos.",
                     "status": "ERROR_NO_CHANGE",
                     "commands": []
                 }
             });
             let _ = broadcast_tx.send(msg.to_string());
+            *session_guard = None;
             return;
         }
+
         println!(
             "[SpectreQA] DOM sin cambios en Fase {}. Reintento {}/3",
             current_phase, session.no_change_retries
         );
+
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        let retry_msg = json!({
+            "type": "EXECUTE_PHASE",
+            "payload": {
+                "phase": current_phase,
+                "thought": format!("Esperando cambios en el DOM (intento {}/3)...", session.no_change_retries),
+                "status": "CONTINUE",
+                "commands": []
+            }
+        });
+        let _ = broadcast_tx.send(retry_msg.to_string());
         return;
     } else {
         session.no_change_retries = 0;
     }
 
-    // Guardar snapshot
-    if let Err(e) = storage::append_mapa(&projects_base, &session.project_id, elements.clone()) {
-        eprintln!("[SpectreQA] Error guardando mapa fase {}: {}", current_phase, e);
-    }
+    // Guardar snapshot en memoria
     session.set_last_dom(elements.clone());
 
     let agent_md = match storage::read_agent_md(&projects_base, &session.project_id) {
@@ -416,11 +451,16 @@ async fn handle_dom_snapshot(
         }
     };
 
+    // ================================================================
+    // CORREGIDO: Ahora pasamos los 6 argumentos que espera build_prompt
+    // ================================================================
     let prompt = prompt_builder::build_prompt(
         &agent_md,
         &session.history,
         current_phase,
         &elements,
+        previous_url.as_deref(),
+        Some(&current_url),
     );
 
     let ai_config = {
@@ -429,8 +469,8 @@ async fn handle_dom_snapshot(
     };
 
     println!(
-        "[SpectreQA] Llamando a IA (provider: {}, modelo: {}, fase {})...",
-        ai_config.provider, ai_config.model, current_phase
+        "[SpectreQA] Llamando a IA (modo: {}, modelo: {}, fase {})...",
+        ai_config.mode, ai_config.model, current_phase
     );
 
     drop(session_guard);
@@ -454,15 +494,18 @@ async fn handle_dom_snapshot(
         }
     };
 
-    let parsed = match command_parser::sanitize_ollama_response(&raw_response) {
-        Ok(r) => r,
+    // ================================================================
+    // PARSER UNIFICADO - SIEMPRE extrae status del JSON
+    // ================================================================
+    let parsed = match command_parser::sanitize_response(&raw_response) {
+        Ok(p) => p,
         Err(e) => {
             send_error(broadcast_tx, &format!("Error parseando respuesta de IA: {}", e));
             return;
         }
     };
 
-    let valid_commands = command_parser::validate_commands(&parsed.commands);
+    let valid_commands = parsed.commands.clone();
 
     println!(
         "[SpectreQA] Fase {}: status={}, commands={}",
@@ -483,16 +526,13 @@ async fn handle_dom_snapshot(
             commands: valid_commands.clone(),
         };
         session.add_phase(record.clone());
-        if let Err(e) = storage::append_respuesta(&projects_base, &session.project_id, &record) {
-            eprintln!("[SpectreQA] Error guardando respuesta fase {}: {}", current_phase, e);
-        }
     } else {
         println!("[SpectreQA] Registro duplicado ignorado para fase {}", current_phase);
     }
 
     // Avanzar la fase interna
     session.advance_phase();
-    let next_phase = session.current_phase; // Fase que se enviará al orquestador
+    let next_phase = session.current_phase;
 
     // Enviar comandos a la extensión usando la fase actualizada
     let msg = json!({
@@ -505,6 +545,12 @@ async fn handle_dom_snapshot(
         }
     });
     let _ = broadcast_tx.send(msg.to_string());
+
+    // Limpiar la sesión si la IA indica éxito o fracaso
+    if matches!(parsed.status.as_str(), "SUCCESS" | "FAILURE") {
+        println!("[SpectreQA] Test finalizado con status: {}", parsed.status);
+        *session_guard = None;
+    }
 }
 
 async fn handle_test_status_update(payload: &Value, state: &Arc<AppState>) {

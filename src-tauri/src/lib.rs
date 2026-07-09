@@ -7,6 +7,7 @@ mod dom_analyzer;
 mod command_parser;
 mod prompt_builder;
 mod ai_client;
+mod error_detector;
 
 use std::fs;
 use std::path::PathBuf;
@@ -17,23 +18,21 @@ use tauri::Manager;
 use session::TestSession;
 
 /**
- * Configuración del proveedor de IA elegido por el usuario.
- * Equivalente al AIConfig del frontend (useSettings.ts).
+ * Configuración de IA simplificada para SpectreQA.
+ * Solo dos modos: local (Ollama) o cloud (servicio FAST).
  */
 #[derive(Debug, Clone)]
 pub struct AIConfig {
-    pub provider: String,  // "ollama" | "openai" | "anthropic"
-    pub model: String,
-    pub api_key: String,
-    pub base_url: String,  // solo relevante para ollama
+    pub mode: String,     // "local" | "cloud"
+    pub model: String,    // Solo usado en modo local (ej: "llama3.2")
+    pub base_url: String, // Local: "http://localhost:11434", Cloud: "https://fast-api.example.com"
 }
 
 impl Default for AIConfig {
     fn default() -> Self {
         Self {
-            provider: "ollama".to_string(),
+            mode: "local".to_string(),
             model: "llama3.2".to_string(),
-            api_key: String::new(),
             base_url: "http://localhost:11434".to_string(),
         }
     }
@@ -68,26 +67,25 @@ fn projects_base(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 /**
- * Recibe la configuración de IA desde React y la guarda en AppState.
- * Se llama al arrancar la app y cada vez que el usuario guarda cambios
- * en SettingsPage. Rust usará esta config en la próxima prueba.
+ * Recibe la configuración de IA desde React.
+ * Modo local: solo model + base_url (Ollama)
+ * Modo cloud: solo base_url (servicio FAST)
  */
 #[tauri::command]
 async fn set_ai_config(
     state: tauri::State<'_, Arc<AppState>>,
-    provider: String,
+    mode: String,
     model: String,
-    api_key: String,
     base_url: String,
 ) -> Result<(), String> {
     let mut config = state.ai_config.lock().await;
-    println!("[SpectreQA] AI config actualizada: provider={}, model={}", provider, model);
-    *config = AIConfig { provider, model, api_key, base_url };
+    println!("[SpectreQA] Modo IA: {}, modelo: {}, URL: {}", mode, model, base_url);
+    *config = AIConfig { mode, model, base_url };
     Ok(())
 }
 
 /**
- * Activa la auditoría de un proyecto. Rust lo recordará cuando llegue START_TEST.
+ * Activa la auditoría de un proyecto.
  */
 #[tauri::command]
 async fn set_active_project(
@@ -101,7 +99,7 @@ async fn set_active_project(
 }
 
 /**
- * Desactiva la auditoría y limpia la sesión activa si la hubiera.
+ * Desactiva la auditoría y limpia la sesión activa.
  */
 #[tauri::command]
 async fn clear_active_project(
@@ -168,17 +166,6 @@ fn create_agent_md(
     );
 
     fs::write(path.join("AGENT.md"), content).map_err(|e| e.to_string())?;
-
-    let mapas_path = path.join("mapas.json");
-    if !mapas_path.exists() {
-        fs::write(&mapas_path, "[]").map_err(|e| e.to_string())?;
-    }
-
-    let respuestas_path = path.join("respuestas.json");
-    if !respuestas_path.exists() {
-        fs::write(&respuestas_path, "[]").map_err(|e| e.to_string())?;
-    }
-
     Ok(())
 }
 
@@ -203,10 +190,9 @@ fn delete_project_dir(app: tauri::AppHandle, project_id: String) -> Result<(), S
     Ok(())
 }
 
- 
 #[tauri::command]
 async fn run_project_commands(command: String, cwd: String) -> Result<(), String> {
-#[cfg(target_os = "windows")]
+    #[cfg(target_os = "windows")]
     let (shell, arg) = ("cmd", "/C");
 
     #[cfg(not(target_os = "windows"))]
@@ -228,32 +214,9 @@ async fn run_project_commands(command: String, cwd: String) -> Result<(), String
         Err(e) => Err(format!("Error: {}", e)),
     }
 }
- 
+
 /// Extrae un número de puerto del comando.
-/// Detecta patrones como: "8000", ":8000", "port 8000", "PORT=8000", "-- --port 8000"
 fn extract_port_from_command(command: &str) -> Option<u16> {
-    // Buscar número de 4 dígitos que parezca puerto (1024–65535)
-    let re_patterns = [
-        r":(\d{4,5})",        // :8000
-        r"port[= ](\d{4,5})", // port=8000 o port 8000
-        r"PORT[= ](\d{4,5})", // PORT=8000
-        r"\s(\d{4,5})\s*$",   // número al final del comando
-        r"\s(\d{4,5})\s",     // número suelto en medio
-    ];
- 
-    for pattern in &re_patterns {
-        // Búsqueda manual sin regex para no añadir dependencia
-        if let Some(port) = find_port_pattern(command, pattern) {
-            if port >= 1024 {
-                return Some(port);
-            }
-        }
-    }
-    None
-}
- 
-fn find_port_pattern(command: &str, pattern: &str) -> Option<u16> {
-    // Implementación simple sin regex: buscar dígitos consecutivos de 4-5 chars
     let chars: Vec<char> = command.chars().collect();
     let mut i = 0;
     while i < chars.len() {
@@ -266,10 +229,8 @@ fn find_port_pattern(command: &str, pattern: &str) -> Option<u16> {
             if num_str.len() >= 4 {
                 if let Ok(port) = num_str.parse::<u16>() {
                     if port >= 1024 {
-                        // Verificar que no sea parte de una IP (precedido por punto)
                         let preceded_by_dot = start > 0 && chars[start - 1] == '.';
                         if !preceded_by_dot {
-                            let _ = pattern; // parámetro usado para futura extensión
                             return Some(port);
                         }
                     }
@@ -281,7 +242,7 @@ fn find_port_pattern(command: &str, pattern: &str) -> Option<u16> {
     }
     None
 }
- 
+
 async fn is_port_in_use(port: u16) -> bool {
     use tokio::net::TcpStream;
     use tokio::time::{timeout, Duration};

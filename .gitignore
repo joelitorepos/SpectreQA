@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Archivos de documentación generados
+bundle_codebase.py
+codigo_completo.txt
+codigo_completo_antiguo.txt
