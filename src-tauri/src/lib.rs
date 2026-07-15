@@ -7,7 +7,6 @@ mod dom_analyzer;
 mod command_parser;
 mod prompt_builder;
 mod ai_client;
-mod error_detector;
 
 use std::fs;
 use std::path::PathBuf;

@@ -3,31 +3,8 @@ import { useState, useEffect } from 'react';
 import { useSettings } from '../hooks/useSettings';
 import type { AIProvider, AIConfig } from '../hooks/useSettings';
 
-const PROVIDERS: { id: AIProvider; label: string; icon: string; description: string }[] = [
-  {
-    id: 'ollama',
-    label: 'Ollama',
-    icon: '🦙',
-    description: 'Modelos locales, sin API key',
-  },
-  {
-    id: 'openai',
-    label: 'OpenAI',
-    icon: '⚡',
-    description: 'GPT-4o, GPT-4 Turbo, etc.',
-  },
-  {
-    id: 'anthropic',
-    label: 'Anthropic',
-    icon: '◆',
-    description: 'Claude 3.5, Claude 3 Opus, etc.',
-  },
-];
-
 const SUGGESTED_MODELS: Record<AIProvider, string[]> = {
   ollama: ['llama3.2', 'llama3.1', 'mistral', 'gemma2', 'qwen2.5'],
-  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
-  anthropic: ['claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5'],
 };
 
 const SettingsPage = () => {
@@ -62,15 +39,6 @@ const SettingsPage = () => {
       });
   }, [form.provider, form.baseUrl]);
 
-  const handleProviderChange = (provider: AIProvider) => {
-    setForm({
-      provider,
-      apiKey: '',
-      model: SUGGESTED_MODELS[provider][0],
-      baseUrl: provider === 'ollama' ? 'http://localhost:11434' : '',
-    });
-    setTestState('idle');
-  };
 
   const handleSave = () => save({ ...settings, ai: form });
 
@@ -108,27 +76,17 @@ const SettingsPage = () => {
         <p className="text-sm text-slate-400 mt-0.5">Modelo de IA para el agente de testing</p>
       </div>
 
-      {/* Provider selector */}
+      {/* Proveedor */}
       <div className="flex flex-col gap-3">
         <label className="text-xs font-medium text-slate-600 uppercase tracking-wide">Proveedor</label>
-        <div className="grid grid-cols-3 gap-2">
-          {PROVIDERS.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => handleProviderChange(p.id)}
-              className={`flex flex-col items-center gap-2 py-4 px-3 rounded-2xl border text-center transition ${
-                form.provider === p.id
-                  ? 'border-[#534AB7] bg-[#534AB7]/5'
-                  : 'border-slate-200 bg-white hover:border-slate-300'
-              }`}
-            >
-              <span className="text-2xl">{p.icon}</span>
-              <span className={`text-sm font-medium ${form.provider === p.id ? 'text-[#534AB7]' : 'text-slate-700'}`}>
-                {p.label}
-              </span>
-              <span className="text-[11px] text-slate-400 leading-tight">{p.description}</span>
-            </button>
-          ))}
+        <div className="flex">
+          <div className="flex items-center gap-4 py-4 px-5 rounded-2xl border border-[#534AB7] bg-[#534AB7]/5 max-w-sm w-full">
+            <span className="text-3xl">🦙</span>
+            <div className="flex flex-col">
+              <span className="text-sm font-semibold text-[#534AB7]">Ollama</span>
+              <span className="text-xs text-slate-500 mt-0.5">Modelos locales integrados sin necesidad de API Key.</span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -167,34 +125,7 @@ const SettingsPage = () => {
         </div>
       )}
 
-      {/* API Key — solo para openai y anthropic */}
-      {form.provider !== 'ollama' && (
-        <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-medium text-slate-600">
-            API Key{' '}
-            <a
-              href={form.provider === 'openai'
-                ? 'https://platform.openai.com/api-keys'
-                : 'https://console.anthropic.com/settings/keys'}
-              target="_blank"
-              rel="noreferrer"
-              className="font-normal text-[#534AB7] underline underline-offset-2"
-            >
-              Obtener →
-            </a>
-          </label>
-          <input
-            type="password"
-            placeholder={form.provider === 'openai' ? 'sk-...' : 'sk-ant-...'}
-            value={form.apiKey}
-            onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
-            className="text-sm font-mono px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-[#534AB7] transition"
-          />
-          <p className="text-[11px] text-slate-400">
-            La API key se guarda localmente en tu máquina, nunca se envía a ningún servidor externo salvo al proveedor.
-          </p>
-        </div>
-      )}
+
 
       {/* Modelo */}
       <div className="flex flex-col gap-1.5">
@@ -230,7 +161,7 @@ const SettingsPage = () => {
       <div className="flex items-center gap-3 pt-2">
         <button
           onClick={handleTest}
-          disabled={testState === 'testing' || (form.provider !== 'ollama' && !form.apiKey)}
+          disabled={testState === 'testing'}
           className="px-4 py-2 text-sm rounded-xl border border-slate-200 text-slate-600 hover:border-slate-300 disabled:opacity-40 disabled:cursor-not-allowed transition"
         >
           {testState === 'testing' ? 'Probando...' : 'Probar conexión'}

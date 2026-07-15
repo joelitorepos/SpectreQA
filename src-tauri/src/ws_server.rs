@@ -3,6 +3,7 @@
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -21,11 +22,18 @@ use crate::dom_analyzer;
 use crate::prompt_builder;
 use crate::ai_client;
 use crate::command_parser;
-use crate::error_detector;
 
 const BASE_PORT: u16 = 9999;
 const MAX_PORT_TRIES: u16 = 10;
-const ALLOWED_EXTENSION_ID: &str = "llcalbmodinmjlmcdnlhpcddppacddmc";
+const ALLOWED_EXTENSION_ID: &str = "";
+
+// Constantes para el timeout
+const SESSION_TIMEOUT_SECONDS: u64 = 60;
+const WATCHDOG_INTERVAL_SECONDS: u64 = 5;
+
+// [DEBUG] Cambiar a true para permitir cualquier extensión (modo pruebas)
+// Cambiar a false para modo producción (solo extensión oficial)
+const IS_DEBUG: bool = true;
 
 pub static EXTENSION_CONNECTED: AtomicBool = AtomicBool::new(false);
 
@@ -44,9 +52,19 @@ pub async fn start(
     broadcast_tx: broadcast::Sender<String>,
     state: Arc<AppState>,
 ) {
+    if IS_DEBUG {
+        println!("[SpectreQA] 🔧 MODO DEBUG activado: se aceptarán extensiones con cualquier ID");
+    }
+
     let port = find_available_port(BASE_PORT).await;
     let addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
     let broadcast_tx = Arc::new(broadcast_tx);
+
+    let state_watchdog = Arc::clone(&state);
+    let broadcast_tx_watchdog = Arc::clone(&broadcast_tx);
+    tokio::spawn(async move {
+        session_watchdog(state_watchdog, broadcast_tx_watchdog).await;
+    });
 
     tokio::spawn(async move {
         start_http_discovery(BASE_PORT, port).await;
@@ -73,6 +91,63 @@ pub async fn start(
     }
 }
 
+async fn session_watchdog(state: Arc<AppState>, broadcast_tx: Arc<Sender>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(WATCHDOG_INTERVAL_SECONDS));
+    
+    loop {
+        interval.tick().await;
+        
+        let should_timeout = {
+            let session_guard = state.test_session.lock().await;
+            if let Some(session) = session_guard.as_ref() {
+                if session.is_navigating {
+                    if session.is_navigation_timeout() {
+                        println!(
+                            "[SpectreQA] WATCHDOG: Timeout de navegación ({}s sin respuesta)",
+                            session.navigation_timeout_secs
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                } else if let Some(last_sent) = session.last_phase_sent_at {
+                    last_sent.elapsed() > Duration::from_secs(SESSION_TIMEOUT_SECONDS)
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+
+        if should_timeout {
+            println!(
+                "[SpectreQA] WATCHDOG: Timeout de sesión detectado ({}s sin actividad)",
+                SESSION_TIMEOUT_SECONDS
+            );
+
+            let timeout_msg = json!({
+                "type": "EXECUTE_PHASE",
+                "payload": {
+                    "phase": 0,
+                    "thought": format!(
+                        "Timeout: El cliente no respondió en {} segundos. La sesión ha sido terminada.",
+                        SESSION_TIMEOUT_SECONDS
+                    ),
+                    "status": "TIMEOUT",
+                    "commands": [],
+                    "actions": []
+                }
+            });
+            let _ = broadcast_tx.send(timeout_msg.to_string());
+
+            let mut session_guard = state.test_session.lock().await;
+            *session_guard = None;
+            println!("[SpectreQA] WATCHDOG: Sesión limpiada por timeout");
+        }
+    }
+}
+
 async fn handle_connection(
     stream: TcpStream,
     peer_addr: SocketAddr,
@@ -83,6 +158,11 @@ async fn handle_connection(
     let mut origin_ok = false;
 
     let ws_stream = accept_hdr_async(stream, |req: &Request, res: Response| {
+        if IS_DEBUG {
+            origin_ok = true;
+            return Ok(res);
+        }
+
         if let Some(origin) = req.headers().get("Origin") {
             if let Ok(origin_str) = origin.to_str() {
                 let expected = format!("chrome-extension://{}", ALLOWED_EXTENSION_ID);
@@ -101,12 +181,16 @@ async fn handle_connection(
         }
     };
 
-    if !origin_ok {
+    if !origin_ok && !IS_DEBUG {
         eprintln!("[SpectreQA] Conexión rechazada desde {} (origen no permitido)", peer_addr);
         return;
     }
 
-    println!("[SpectreQA] Extensión conectada desde {}", peer_addr);
+    if IS_DEBUG {
+        println!("[SpectreQA] 🔧 Conexión aceptada en modo debug desde {}", peer_addr);
+    } else {
+        println!("[SpectreQA] Extensión conectada desde {}", peer_addr);
+    }
     EXTENSION_CONNECTED.store(true, Ordering::Relaxed);
 
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
@@ -128,14 +212,18 @@ async fn handle_connection(
                                             .and_then(|v| v.as_str())
                                             .unwrap_or("");
 
-                                        if ext_id == ALLOWED_EXTENSION_ID {
+                                        if ext_id == ALLOWED_EXTENSION_ID || IS_DEBUG {
                                             handshake_done = true;
                                             EXTENSION_CONNECTED.store(true, Ordering::Relaxed);
                                             let _ = ws_sender.send(Message::Text(
                                                 json!({ "type": "HANDSHAKE_ACK", "status": "ok" })
                                                     .to_string().into()
                                             )).await;
-                                            println!("[SpectreQA] Handshake OK (ext: {})", ext_id);
+                                            if IS_DEBUG {
+                                                println!("[SpectreQA] 🔧 Handshake aceptado en modo debug (ext: {})", ext_id);
+                                            } else {
+                                                println!("[SpectreQA] Handshake OK (ext: {})", ext_id);
+                                            }
                                         } else {
                                             let _ = ws_sender.send(Message::Text(
                                                 json!({
@@ -161,14 +249,34 @@ async fn handle_connection(
                                     "DOM_SNAPSHOT" if handshake_done => {
                                         handle_dom_snapshot(&parsed.payload, &state, &broadcast_tx).await;
                                     }
+                                    "NAVIGATION_DETECTED" if handshake_done => {
+                                        handle_navigation_detected(&parsed.payload, &state).await;
+                                    }
                                     "TEST_STATUS_UPDATE" if handshake_done => {
-                                        handle_test_status_update(&parsed.payload, &state).await;
+                                        if let Some(status_str) = parsed.payload.get("status").and_then(|v| v.as_str()) {
+                                            println!("[SpectreQA] Mensaje de estado recibido de la extensión: {}", status_str);
+
+                                            if status_str == "ORCHESTRATOR_LOST" {
+                                                handle_orchestrator_lost(&state).await;
+                                            } else if status_str == "TEST_SUCCESS" {
+                                                println!("[SpectreQA] Prueba terminada con ÉXITO por evento de ciclo de vida.");
+                                                let mut session_guard = state.test_session.lock().await;
+                                                *session_guard = None;
+                                                println!("[SpectreQA] Sesión limpiada exitosamente.");
+                                            } else if status_str == "TEST_ERROR" {
+                                                handle_test_status_update(&parsed.payload, &state).await;
+                                            } else {
+                                                handle_test_status_update(&parsed.payload, &state).await;
+                                            }
+                                        } else {
+                                            handle_test_status_update(&parsed.payload, &state).await;
+                                        }
                                     }
                                     "AUDIT_EVENT" if handshake_done => {
                                         let _ = app.emit("audit-event", &parsed.payload);
                                     }
                                     "CLIENT_CONSOLE_ERROR" if handshake_done => {
-                                        handle_client_console_error(&parsed.payload, &state, &broadcast_tx).await;
+                                        println!("[SpectreQA] console.error del cliente: {:?}", parsed.payload);
                                     }
                                     _ if !handshake_done => {
                                         eprintln!("[SpectreQA] Mensaje recibido sin handshake previo, ignorando.");
@@ -247,7 +355,6 @@ async fn handle_start_test(
         }
     };
 
-    // Crear nueva sesión con historial vacío
     let session = TestSession::new(project_id.clone(), agent_md, Vec::new());
     {
         let mut s = state.test_session.lock().await;
@@ -266,35 +373,26 @@ async fn handle_start_test(
     println!("[SpectreQA] handle_start_test completado, TEST_STARTED enviado al broadcast");
 }
 
-async fn handle_client_console_error(
-    payload: &Value,
-    state: &Arc<AppState>,
-    broadcast_tx: &Arc<Sender>,
-) {
-    let command = payload.get("command").and_then(|v| v.as_str()).unwrap_or("?");
-    let first_error = payload
-        .get("errors")
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|e| e.get("message"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("(sin detalle)");
+async fn handle_navigation_detected(payload: &Value, state: &Arc<AppState>) {
+    let mut session_guard = state.test_session.lock().await;
+    if let Some(session) = session_guard.as_mut() {
+        session.start_navigation();
+        println!("[SpectreQA] Navegación detectada. Modo de espera activado.");
+    }
+}
 
-    println!("[SpectreQA] console.error reportado por el cliente tras {}: {}", command, first_error);
-
-    let msg = json!({
-        "type": "EXECUTE_PHASE",
-        "payload": {
-            "phase": 0,
-            "thought": format!("La página emitió un console.error tras ejecutar {}: {}", command, first_error),
-            "status": "FAILURE",
-            "commands": []
+async fn handle_orchestrator_lost(state: &Arc<AppState>) {
+    let mut session_guard = state.test_session.lock().await;
+    
+    if let Some(session) = session_guard.as_mut() {
+        if session.is_navigating {
+            println!("[SpectreQA] Orquestador perdido durante navegación. Esperando reinyección...");
+            return;
+        } else {
+            println!("[SpectreQA] Orquestador perdido sin navegación activa. Terminando prueba.");
+            *session_guard = None;
         }
-    });
-    let _ = broadcast_tx.send(msg.to_string());
-
-    let mut session = state.test_session.lock().await;
-    *session = None;
+    }
 }
 
 async fn handle_dom_snapshot(
@@ -304,7 +402,6 @@ async fn handle_dom_snapshot(
 ) {
     println!("[SpectreQA] handle_dom_snapshot - payload recibido: {}", payload);
 
-    // Extraer elements (dentro de payload o en raíz)
     let elements = if let Some(inner) = payload.get("payload") {
         if let Some(e) = inner.get("elements") {
             println!("[SpectreQA] elements encontrado dentro de payload");
@@ -321,30 +418,6 @@ async fn handle_dom_snapshot(
         return;
     };
 
-    // ================================================================
-    // MIDDLEWARE DE DETECCIÓN DE ERROR EN LABELS
-    // ================================================================
-    if let Some((label_id, label_content)) = error_detector::detect_label_error(&elements) {
-        println!(
-            "[SpectreQA] Error detectado en label '{}': {}",
-            label_id, label_content
-        );
-        let msg = json!({
-            "type": "EXECUTE_PHASE",
-            "payload": {
-                "phase": 0,
-                "thought": format!("Se detectó un mensaje de error en la interfaz ('{}'): {}", label_id, label_content),
-                "status": "FAILURE",
-                "commands": []
-            }
-        });
-        let _ = broadcast_tx.send(msg.to_string());
-        let mut session_guard = state.test_session.lock().await;
-        *session_guard = None;
-        return;
-    }
-
-    // Extraer phase y url
     let current_phase = if let Some(inner) = payload.get("payload") {
         inner.get("phase").and_then(|v| v.as_u64()).unwrap_or(0) as u32
     } else {
@@ -356,6 +429,13 @@ async fn handle_dom_snapshot(
     } else {
         payload.get("url").and_then(|v| v.as_str()).unwrap_or("")
     }.to_string();
+
+    let lifecycle_status = if let Some(inner) = payload.get("payload") {
+        inner.get("lifecycleStatus").and_then(|v| v.as_str()).unwrap_or("READY")
+    } else {
+        payload.get("lifecycleStatus").and_then(|v| v.as_str()).unwrap_or("READY")
+    };
+    println!("[SpectreQA] lifecycleStatus recibido: {}", lifecycle_status);
 
     let projects_base = match state.projects_base() {
         Ok(p) => p,
@@ -374,16 +454,27 @@ async fn handle_dom_snapshot(
         }
     };
 
+    if session.is_navigating {
+        session.end_navigation();
+        println!("[SpectreQA] Nueva página cargada y DOM recibido. Reanudando prueba...");
+    }
+
+    if lifecycle_status == "WAIT" {
+        session.set_last_dom(elements.clone());
+        session.last_url = Some(url.clone());
+        session.mark_phase_sent();
+        
+        println!("[SpectreQA] Orquestador reinyectado con éxito. Página en estado WAIT. Pausando llamadas a la IA...");
+        println!("[SpectreQA] Esperando evento CONTINUE para reanudar ejecución.");
+        return;
+    }
+
     println!("[SpectreQA] Procesando DOM_SNAPSHOT para Fase {} (URL: {})", current_phase, url);
 
-    // Guardar la URL anterior y actual para contexto de la IA
     let previous_url = session.last_url.clone();
     let current_url = url.clone();
-    
-    // Actualizar la URL actual en la sesión
     session.last_url = Some(url);
 
-    // Validar si el DOM ha cambiado
     let dom_changed = if current_phase > 0 {
         if let Some(prev_elements) = &session.last_dom {
             dom_analyzer::has_dom_changed(prev_elements, &elements)
@@ -394,9 +485,6 @@ async fn handle_dom_snapshot(
         true
     };
 
-    // ================================================================
-    // FIX DEL "MODO ZOMBIE"
-    // ================================================================
     if !dom_changed {
         let exceeded = session.register_no_change();
         if exceeded {
@@ -410,7 +498,8 @@ async fn handle_dom_snapshot(
                     "phase": current_phase,
                     "thought": "El DOM no cambió tras varios intentos.",
                     "status": "ERROR_NO_CHANGE",
-                    "commands": []
+                    "commands": [],
+                    "actions": []
                 }
             });
             let _ = broadcast_tx.send(msg.to_string());
@@ -431,7 +520,8 @@ async fn handle_dom_snapshot(
                 "phase": current_phase,
                 "thought": format!("Esperando cambios en el DOM (intento {}/3)...", session.no_change_retries),
                 "status": "CONTINUE",
-                "commands": []
+                "commands": [],
+                "actions": []
             }
         });
         let _ = broadcast_tx.send(retry_msg.to_string());
@@ -440,7 +530,6 @@ async fn handle_dom_snapshot(
         session.no_change_retries = 0;
     }
 
-    // Guardar snapshot en memoria
     session.set_last_dom(elements.clone());
 
     let agent_md = match storage::read_agent_md(&projects_base, &session.project_id) {
@@ -451,9 +540,6 @@ async fn handle_dom_snapshot(
         }
     };
 
-    // ================================================================
-    // CORREGIDO: Ahora pasamos los 6 argumentos que espera build_prompt
-    // ================================================================
     let prompt = prompt_builder::build_prompt(
         &agent_md,
         &session.history,
@@ -494,62 +580,38 @@ async fn handle_dom_snapshot(
         }
     };
 
-    // ================================================================
-    // PARSER UNIFICADO - SIEMPRE extrae status del JSON
-    // ================================================================
-    let parsed = match command_parser::sanitize_response(&raw_response) {
-        Ok(p) => p,
-        Err(e) => {
-            send_error(broadcast_tx, &format!("Error parseando respuesta de IA: {}", e));
-            return;
+    match command_parser::sanitize_response(&raw_response) {
+        Ok(parsed) => {
+            println!("[SpectreQA] Fase {}: status={}, commands={}", current_phase, parsed.status, parsed.commands.len());
+
+            session.history.push(PhaseRecord {
+                phase: current_phase,
+                thought: parsed.thought.clone(),
+                status: parsed.status.clone(),
+                commands: parsed.commands.clone(),
+            });
+
+            let next_phase = current_phase + 1;
+
+            let msg = serde_json::json!({
+                "type": "EXECUTE_PHASE",
+                "payload": {
+                    "phase": next_phase,
+                    "thought": parsed.thought,
+                    "status": parsed.status,
+                    "commands": parsed.commands.clone(),
+                    "actions": parsed.commands
+                }
+            });
+            
+            if let Err(e) = broadcast_tx.send(msg.to_string()) {
+                eprintln!("[SpectreQA] Error al enviar EXECUTE_PHASE al canal de transmisión: {}", e);
+            }
         }
-    };
-
-    let valid_commands = parsed.commands.clone();
-
-    println!(
-        "[SpectreQA] Fase {}: status={}, commands={}",
-        current_phase, parsed.status, valid_commands.len()
-    );
-
-    // Evitar duplicados en el historial: comparar con el último registro
-    let last_record = session.history.last();
-    let is_duplicate = last_record.map_or(false, |last| {
-        last.thought == parsed.thought && last.commands == valid_commands
-    });
-
-    if !is_duplicate {
-        let record = PhaseRecord {
-            phase: current_phase,
-            thought: parsed.thought.clone(),
-            status: parsed.status.clone(),
-            commands: valid_commands.clone(),
-        };
-        session.add_phase(record.clone());
-    } else {
-        println!("[SpectreQA] Registro duplicado ignorado para fase {}", current_phase);
-    }
-
-    // Avanzar la fase interna
-    session.advance_phase();
-    let next_phase = session.current_phase;
-
-    // Enviar comandos a la extensión usando la fase actualizada
-    let msg = json!({
-        "type": "EXECUTE_PHASE",
-        "payload": {
-            "phase": next_phase,
-            "thought": parsed.thought,
-            "status": parsed.status,
-            "commands": valid_commands
+        Err(err) => {
+            eprintln!("[SpectreQA] Error crítico sanitizando la respuesta de la IA: {}", err);
+            send_error(broadcast_tx, &format!("Error al parsear comandos: {}", err));
         }
-    });
-    let _ = broadcast_tx.send(msg.to_string());
-
-    // Limpiar la sesión si la IA indica éxito o fracaso
-    if matches!(parsed.status.as_str(), "SUCCESS" | "FAILURE") {
-        println!("[SpectreQA] Test finalizado con status: {}", parsed.status);
-        *session_guard = None;
     }
 }
 
@@ -558,9 +620,19 @@ async fn handle_test_status_update(payload: &Value, state: &Arc<AppState>) {
         .get("status")
         .and_then(|v| v.as_str())
         .unwrap_or("UNKNOWN");
+    
     println!("[SpectreQA] Prueba terminada con status: {}", status);
+    
     let mut session = state.test_session.lock().await;
-    *session = None;
+    if let Some(sess) = session.as_ref() {
+        if !sess.is_navigating {
+            *session = None;
+        } else {
+            println!("[SpectreQA] Ignorando limpieza de sesión durante navegación");
+        }
+    } else {
+        *session = None;
+    }
 }
 
 fn send_error(broadcast_tx: &Arc<Sender>, message: &str) {
@@ -571,7 +643,8 @@ fn send_error(broadcast_tx: &Arc<Sender>, message: &str) {
             "phase": 0,
             "thought": message,
             "status": "ERROR_NO_CHANGE",
-            "commands": []
+            "commands": [],
+            "actions": []
         }
     });
     let _ = broadcast_tx.send(msg.to_string());
