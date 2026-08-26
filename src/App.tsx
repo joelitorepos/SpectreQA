@@ -16,6 +16,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import AppLayout from './components/layout/AppLayout';
 import ProjectsPage from './pages/ProjectPage';
 import SettingsPage from './pages/SettingsPage';
+import LogsPage from './pages/LogsPage';
 import { useSettings } from './hooks/useSettings';
 
 const App = () => {
@@ -27,6 +28,7 @@ const App = () => {
         <Route element={<AppLayout />}>
           <Route index element={<ProjectsPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="logs" element={<LogsPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

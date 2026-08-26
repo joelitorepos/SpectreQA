@@ -47,7 +47,7 @@ pub fn build_prompt(
  * Formatea el historial de fases anteriores en texto legible para la IA.
  * Si no hay historial, devuelve un string indicando que es la primera fase.
  */
-fn format_history(history: &[PhaseRecord]) -> String {
+pub fn format_history(history: &[PhaseRecord]) -> String {
     if history.is_empty() {
         return "# No previous phases executed yet.".to_string();
     }
@@ -98,7 +98,7 @@ fn serialize_dom(dom: &Value) -> String {
  *
  * Se ignoran los LABEL y cualquier otro elemento.
  */
-fn obfuscate_dom_inputs(dom: &mut Value) {
+pub fn obfuscate_dom_inputs(dom: &mut Value) {
     match dom {
         Value::Object(map) => {
             // Primero, comprobamos si este objeto es un INPUT

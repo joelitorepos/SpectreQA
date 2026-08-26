@@ -41,6 +41,16 @@ const Sidebar = () => {
             </svg>
           }
         />
+        <NavButton
+          to="logs"
+          label="Logs"
+          icon={
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M8 6h12" /><path d="M8 12h8" /><path d="M8 18h6" />
+              <path d="M4 6h.01" /><path d="M4 12h.01" /><path d="M4 18h.01" />
+            </svg>
+          }
+        />
       </nav>
 
       {/* Extension status */}
@@ -61,25 +71,25 @@ const Sidebar = () => {
         </div>
       </div>
 
-      {/* Ollama status - Crítico (Offline) */}
+      {/* Ollama status - Sugerido, no obligatorio (hay alternativa en la nube) */}
       {ollamaStatus === 'offline' && (
         <div className="px-3 pb-3">
-          <div className="bg-rose-50 border border-rose-200 rounded-xl px-3.5 py-3 space-y-1.5">
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-3 space-y-1.5">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-rose-700">Ollama</span>
-              <span className="text-xs font-semibold text-rose-600">Requerido</span>
+              <span className="text-xs font-bold text-amber-700">Ollama</span>
+              <span className="text-xs font-semibold text-amber-600">Sugerido</span>
             </div>
-            <p className="text-[11px] text-rose-600 leading-normal">
-              Es necesario{' '}
+            <p className="text-[11px] text-amber-700 leading-normal">
+              Opcional:{' '}
               <a
                 href="https://ollama.com/download"
                 target="_blank"
                 rel="noreferrer"
-                className="underline underline-offset-2 font-bold hover:text-rose-800"
+                className="underline underline-offset-2 font-bold hover:text-amber-900"
               >
-                descargar Ollama
+                descarga Ollama
               </a>{' '}
-              y tenerlo en ejecución para poder utilizar las funciones de IA de la aplicación.
+              para correr la IA localmente, o usa el servicio en la nube cuando esté disponible.
             </p>
           </div>
         </div>

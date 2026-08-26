@@ -101,7 +101,7 @@ const NewProjectModal = ({ open: isOpen, onClose, onConfirm }: NewProjectModalPr
             {(['local', 'production'] as ProjectEnv[]).map((env) => (
               <button
                 key={env}
-                onClick={() => setForm({ ...form, env, projectPath: '', serveCommand: '' })}
+                onClick={() => setForm({ ...form, env })}
                 className={`flex flex-col items-center gap-1.5 py-3 rounded-xl border text-sm font-medium transition ${
                   form.env === env
                     ? 'border-[#534AB7] bg-[#534AB7]/5 text-[#534AB7]'
@@ -134,68 +134,67 @@ const NewProjectModal = ({ open: isOpen, onClose, onConfirm }: NewProjectModalPr
           </div>
         </div>
 
-        {/* Solo para local: carpeta raíz + comando */}
-        {form.env === 'local' && (
-          <>
-            {/* Carpeta raíz */}
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-slate-600">
-                Carpeta raíz del proyecto
-              </label>
-              <div className="flex gap-2">
-                <div className="flex-1 flex items-center border border-slate-200 bg-slate-50 rounded-xl overflow-hidden focus-within:border-[#534AB7] transition min-w-0">
-                  <span className="pl-3 shrink-0">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                    </svg>
-                  </span>
-                  <input
-                    type="text"
-                    readOnly
-                    placeholder="/home/usuario/mi-proyecto"
-                    value={form.projectPath}
-                    className="flex-1 text-xs py-2 px-2 bg-transparent text-slate-700 placeholder:text-slate-400 focus:outline-none font-mono truncate cursor-default"
-                  />
-                </div>
-                <button
-                  onClick={handlePickFolder}
-                  className="shrink-0 px-3 py-2 text-xs font-medium rounded-xl border border-slate-200 text-slate-600 hover:border-[#534AB7] hover:text-[#534AB7] transition"
-                >
-                  Explorar
-                </button>
-              </div>
-            </div>
-
-            {/* Comando para servir */}
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-slate-600">
-                Comando para levantar el proyecto{' '}
-                <span className="font-normal text-slate-400">(opcional)</span>
-              </label>
-              <div className="flex items-center border border-slate-200 bg-slate-50 rounded-xl overflow-hidden focus-within:border-[#534AB7] transition">
-                <span className="pl-3 text-xs text-slate-400 select-none font-mono">$</span>
+        {/* Carpeta raíz + comando: siempre montados para no perder el valor,
+            ocultos visualmente cuando el entorno es 'production' */}
+        <div className={form.env === 'local' ? 'contents' : 'hidden'}>
+          {/* Carpeta raíz */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-slate-600">
+              Carpeta raíz del proyecto
+            </label>
+            <div className="flex gap-2">
+              <div className="flex-1 flex items-center border border-slate-200 bg-slate-50 rounded-xl overflow-hidden focus-within:border-[#534AB7] transition min-w-0">
+                <span className="pl-3 shrink-0">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                  </svg>
+                </span>
                 <input
                   type="text"
-                  placeholder="npm run dev"
-                  value={form.serveCommand}
-                  onChange={(e) => setForm({ ...form, serveCommand: e.target.value })}
-                  className="flex-1 text-xs py-2 px-2 bg-transparent text-slate-700 placeholder:text-slate-400 focus:outline-none font-mono"
+                  readOnly
+                  placeholder="/home/usuario/mi-proyecto"
+                  value={form.projectPath}
+                  className="flex-1 text-xs py-2 px-2 bg-transparent text-slate-700 placeholder:text-slate-400 focus:outline-none font-mono truncate cursor-default"
                 />
               </div>
-              {form.projectPath && (
-                <p className="text-[11px] text-slate-400">
-                  Se ejecutará desde{' '}
-                  <span className="font-mono text-slate-500">{form.projectPath}</span>
-                </p>
-              )}
-              {!form.projectPath && (
-                <p className="text-[11px] text-slate-400">
-                  Se ejecutará desde la carpeta raíz que elijas arriba.
-                </p>
-              )}
+              <button
+                onClick={handlePickFolder}
+                className="shrink-0 px-3 py-2 text-xs font-medium rounded-xl border border-slate-200 text-slate-600 hover:border-[#534AB7] hover:text-[#534AB7] transition"
+              >
+                Explorar
+              </button>
             </div>
-          </>
-        )}
+          </div>
+
+          {/* Comando para servir */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-slate-600">
+              Comando para levantar el proyecto{' '}
+              <span className="font-normal text-slate-400">(opcional)</span>
+            </label>
+            <div className="flex items-center border border-slate-200 bg-slate-50 rounded-xl overflow-hidden focus-within:border-[#534AB7] transition">
+              <span className="pl-3 text-xs text-slate-400 select-none font-mono">$</span>
+              <input
+                type="text"
+                placeholder="npm run dev"
+                value={form.serveCommand}
+                onChange={(e) => setForm({ ...form, serveCommand: e.target.value })}
+                className="flex-1 text-xs py-2 px-2 bg-transparent text-slate-700 placeholder:text-slate-400 focus:outline-none font-mono"
+              />
+            </div>
+            {form.projectPath && (
+              <p className="text-[11px] text-slate-400">
+                Se ejecutará desde{' '}
+                <span className="font-mono text-slate-500">{form.projectPath}</span>
+              </p>
+            )}
+            {!form.projectPath && (
+              <p className="text-[11px] text-slate-400">
+                Se ejecutará desde la carpeta raíz que elijas arriba.
+              </p>
+            )}
+          </div>
+        </div>
 
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-1">

@@ -6,7 +6,6 @@ import type { Project } from '../../types/project';
 
 interface ProjectCardProps {
   project: Project;
-  onDelete: (project: Project) => void;
   onEdit: (project: Project) => void;
   onOpenAgent: (project: Project) => void;
   onToggleAuditing: (id: string) => void;
@@ -30,13 +29,6 @@ const IconFile = () => (
   </svg>
 );
 
-const IconTrash = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/>
-    <path d="M10 11v6m4-6v6"/><path d="M9 6V4h6v2"/>
-  </svg>
-);
-
 // Toggle switch component
 const Toggle = ({ checked, onChange }: { checked: boolean; onChange: () => void }) => (
   <button
@@ -52,7 +44,7 @@ const Toggle = ({ checked, onChange }: { checked: boolean; onChange: () => void 
   </button>
 );
 
-const ProjectCard = ({ project, onDelete, onEdit, onOpenAgent, onToggleAuditing }: ProjectCardProps) => {
+const ProjectCard = ({ project, onEdit, onOpenAgent, onToggleAuditing }: ProjectCardProps) => {
   const [runState, setRunState] = useState<RunState>('idle');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -172,13 +164,6 @@ const ProjectCard = ({ project, onDelete, onEdit, onOpenAgent, onToggleAuditing 
             title="Editar proyecto"
           >
             <IconEdit />
-          </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); onDelete(project); }}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition"
-            title="Eliminar proyecto"
-          >
-            <IconTrash />
           </button>
         </div>
       </div>

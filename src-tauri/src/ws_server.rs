@@ -16,10 +16,9 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::accept_hdr_async;
 
 use crate::AppState;
-use crate::session::{PhaseRecord, TestSession};
+use crate::session::{PhaseRecord, TestSession, TestOutcome};
 use crate::storage;
 use crate::dom_analyzer;
-use crate::prompt_builder;
 use crate::ai_client;
 use crate::command_parser;
 
@@ -100,7 +99,11 @@ async fn session_watchdog(state: Arc<AppState>, broadcast_tx: Arc<Sender>) {
         let should_timeout = {
             let session_guard = state.test_session.lock().await;
             if let Some(session) = session_guard.as_ref() {
-                if session.is_navigating {
+                if session.is_async_waiting {
+                    // Espera controlada (PAUSE/WAIT manual o del QA): el watchdog
+                    // no debe actuar, es justo para lo que existe este flag.
+                    false
+                } else if session.is_navigating {
                     if session.is_navigation_timeout() {
                         println!(
                             "[SpectreQA] WATCHDOG: Timeout de navegación ({}s sin respuesta)",
@@ -141,9 +144,8 @@ async fn session_watchdog(state: Arc<AppState>, broadcast_tx: Arc<Sender>) {
             });
             let _ = broadcast_tx.send(timeout_msg.to_string());
 
-            let mut session_guard = state.test_session.lock().await;
-            *session_guard = None;
-            println!("[SpectreQA] WATCHDOG: Sesión limpiada por timeout");
+            finish_session(&state, TestOutcome::Error).await;
+            println!("[SpectreQA] WATCHDOG: Sesión finalizada por timeout");
         }
     }
 }
@@ -253,24 +255,10 @@ async fn handle_connection(
                                         handle_navigation_detected(&parsed.payload, &state).await;
                                     }
                                     "TEST_STATUS_UPDATE" if handshake_done => {
-                                        if let Some(status_str) = parsed.payload.get("status").and_then(|v| v.as_str()) {
-                                            println!("[SpectreQA] Mensaje de estado recibido de la extensión: {}", status_str);
-
-                                            if status_str == "ORCHESTRATOR_LOST" {
-                                                handle_orchestrator_lost(&state).await;
-                                            } else if status_str == "TEST_SUCCESS" {
-                                                println!("[SpectreQA] Prueba terminada con ÉXITO por evento de ciclo de vida.");
-                                                let mut session_guard = state.test_session.lock().await;
-                                                *session_guard = None;
-                                                println!("[SpectreQA] Sesión limpiada exitosamente.");
-                                            } else if status_str == "TEST_ERROR" {
-                                                handle_test_status_update(&parsed.payload, &state).await;
-                                            } else {
-                                                handle_test_status_update(&parsed.payload, &state).await;
-                                            }
-                                        } else {
-                                            handle_test_status_update(&parsed.payload, &state).await;
-                                        }
+                                        handle_test_status_update(&parsed.payload, &state).await;
+                                    }
+                                    "TEST_TERMINATED" if handshake_done => {
+                                        handle_test_terminated(&parsed.payload, &state).await;
                                     }
                                     "AUDIT_EVENT" if handshake_done => {
                                         let _ = app.emit("audit-event", &parsed.payload);
@@ -381,18 +369,69 @@ async fn handle_navigation_detected(payload: &Value, state: &Arc<AppState>) {
     }
 }
 
-async fn handle_orchestrator_lost(state: &Arc<AppState>) {
+/**
+ * Único punto donde una sesión termina de verdad: arma el log a partir del
+ * historial de fases, lo guarda en disco, y limpia la sesión activa.
+ * Se usa para los tres finales posibles: éxito, error, y detención manual.
+ */
+async fn finish_session(state: &Arc<AppState>, outcome: TestOutcome) {
     let mut session_guard = state.test_session.lock().await;
-    
-    if let Some(session) = session_guard.as_mut() {
-        if session.is_navigating {
-            println!("[SpectreQA] Orquestador perdido durante navegación. Esperando reinyección...");
+    let session = match session_guard.take() {
+        Some(s) => s,
+        None => {
+            println!("[SpectreQA] finish_session({:?}) llamado sin sesión activa, nada que hacer.", outcome);
             return;
-        } else {
-            println!("[SpectreQA] Orquestador perdido sin navegación activa. Terminando prueba.");
-            *session_guard = None;
+        }
+    };
+    drop(session_guard);
+
+    let projects_base = match state.projects_base() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[SpectreQA] Sesión finalizada ({:?}) pero no se pudo obtener projects_base: {}", outcome, e);
+            return;
+        }
+    };
+
+    let entry = session.to_log_entry(outcome);
+    match storage::save_test_log(&projects_base, &entry) {
+        Ok(log_id) => println!("[SpectreQA] Sesión finalizada ({:?}). Log guardado: {}", outcome, log_id),
+        Err(e) => eprintln!("[SpectreQA] Sesión finalizada ({:?}) pero no se pudo guardar el log: {}", outcome, e),
+    }
+
+    // Avisar al backend cloud cómo terminó la corrida — sin esto,
+    // /execute/result nunca se llama del lado del servidor, y el cache
+    // jamás se confirma (SUCCESS) ni se descarta (cualquier otro caso).
+    // TERMINATED cuenta como fallo: una corrida interrumpida a mitad de
+    // camino nunca debería quedar registrada como "la última corrida
+    // buena" — mismo criterio que un ERROR real.
+    let ai_config = { state.ai_config.lock().await.clone() };
+    if ai_config.mode == "cloud" {
+        let status = match outcome {
+            TestOutcome::Success => "SUCCESS",
+            TestOutcome::Error | TestOutcome::Terminated => "FAILURE",
+        };
+
+        match ai_client::report_result(&ai_config, &session.project_id, status).await {
+            Ok(()) => println!("[SpectreQA] Resultado notificado al backend cloud: {} (proyecto {})", status, session.project_id),
+            Err(e) => eprintln!("[SpectreQA] No se pudo notificar el resultado al backend cloud: {}", e),
         }
     }
+}
+
+async fn handle_orchestrator_lost(state: &Arc<AppState>) {
+    let is_navigating = {
+        let session_guard = state.test_session.lock().await;
+        session_guard.as_ref().map(|s| s.is_navigating).unwrap_or(false)
+    };
+
+    if is_navigating {
+        println!("[SpectreQA] Orquestador perdido durante navegación. Esperando reinyección...");
+        return;
+    }
+
+    println!("[SpectreQA] Orquestador perdido sin navegación activa. Terminando prueba.");
+    finish_session(state, TestOutcome::Error).await;
 }
 
 async fn handle_dom_snapshot(
@@ -475,56 +514,32 @@ async fn handle_dom_snapshot(
     let current_url = url.clone();
     session.last_url = Some(url);
 
-    let dom_changed = if current_phase > 0 {
-        if let Some(prev_elements) = &session.last_dom {
-            dom_analyzer::has_dom_changed(prev_elements, &elements)
-        } else {
-            true
-        }
+    let dom_changed = if let Some(prev_elements) = &session.last_dom {
+        println!("[SpectreQA] comparando DOM");
+        dom_analyzer::has_dom_changed(prev_elements, &elements)
     } else {
         true
     };
 
     if !dom_changed {
-        let exceeded = session.register_no_change();
-        if exceeded {
-            println!(
-                "[SpectreQA] DOM estancado tras {} reintentos en Fase {}. Terminando.",
-                session.no_change_retries, current_phase
-            );
-            let msg = json!({
-                "type": "EXECUTE_PHASE",
-                "payload": {
-                    "phase": current_phase,
-                    "thought": "El DOM no cambió tras varios intentos.",
-                    "status": "ERROR_NO_CHANGE",
-                    "commands": [],
-                    "actions": []
-                }
-            });
-            let _ = broadcast_tx.send(msg.to_string());
-            *session_guard = None;
-            return;
-        }
-
+        session.register_no_change();
         println!(
-            "[SpectreQA] DOM sin cambios en Fase {}. Reintento {}/3",
-            current_phase, session.no_change_retries
+            "[SpectreQA] DOM sin cambios en Fase {}. Terminando (sin reintentos).",
+            current_phase
         );
-
-        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-
-        let retry_msg = json!({
+        let msg = json!({
             "type": "EXECUTE_PHASE",
             "payload": {
                 "phase": current_phase,
-                "thought": format!("Esperando cambios en el DOM (intento {}/3)...", session.no_change_retries),
-                "status": "CONTINUE",
+                "thought": "El DOM no cambió respecto al snapshot anterior.",
+                "status": "ERROR_NO_CHANGE",
                 "commands": [],
                 "actions": []
             }
         });
-        let _ = broadcast_tx.send(retry_msg.to_string());
+        let _ = broadcast_tx.send(msg.to_string());
+        drop(session_guard);
+        finish_session(state, TestOutcome::Error).await;
         return;
     } else {
         session.no_change_retries = 0;
@@ -540,15 +555,6 @@ async fn handle_dom_snapshot(
         }
     };
 
-    let prompt = prompt_builder::build_prompt(
-        &agent_md,
-        &session.history,
-        current_phase,
-        &elements,
-        previous_url.as_deref(),
-        Some(&current_url),
-    );
-
     let ai_config = {
         let cfg = state.ai_config.lock().await;
         cfg.clone()
@@ -559,12 +565,35 @@ async fn handle_dom_snapshot(
         ai_config.mode, ai_config.model, current_phase
     );
 
+    // Capturamos lo que necesitamos del historial ANTES de soltar el lock —
+    // en modo "cloud" call_ai ya no recibe un prompt armado, arma/manda los
+    // datos crudos internamente según el modo.
+    let project_id = session.project_id.clone();
+    let history_snapshot = session.history.clone();
+
     drop(session_guard);
 
-    let raw_response = match ai_client::call_ai(&ai_config, &prompt).await {
+    let raw_response = match ai_client::call_ai(
+        &ai_config,
+        &project_id,
+        &agent_md,
+        &history_snapshot,
+        current_phase,
+        &elements,
+        previous_url.as_deref(),
+        Some(&current_url),
+    ).await {
         Ok(r) => r,
         Err(e) => {
+            // CRÍTICO: un error del proveedor de IA (502, 404 de modelo, timeout,
+            // etc.) es terminal, no algo para reintentar en silencio. Antes
+            // solo se avisaba a la extensión pero la sesión seguía viva, así
+            // que el siguiente DOM_SNAPSHOT volvía a llamar a la IA — y así
+            // indefinidamente, sin backoff, gastando cuota real en cada vuelta.
+            // finish_session() limpia la sesión: el próximo DOM_SNAPSHOT ya no
+            // encuentra sesión activa y se corta ahí, sin tocar al proveedor.
             send_error(broadcast_tx, &format!("Error con el proveedor de IA: {}", e));
+            finish_session(state, TestOutcome::Error).await;
             return;
         }
     };
@@ -603,7 +632,16 @@ async fn handle_dom_snapshot(
                     "actions": parsed.commands
                 }
             });
-            
+
+            // DIAGNÓSTICO: si esto muestra 2+ suscriptores de forma consistente,
+            // confirma la teoría de conexiones WS duplicadas/zombie — el
+            // EXECUTE_PHASE se manda a ambas pero solo una llega de verdad al
+            // navegador. Con 1 suscriptor, el problema está en otro lado.
+            println!(
+                "[SpectreQA] Enviando EXECUTE_PHASE fase {} — suscriptores activos: {}",
+                next_phase, broadcast_tx.receiver_count()
+            );
+
             if let Err(e) = broadcast_tx.send(msg.to_string()) {
                 eprintln!("[SpectreQA] Error al enviar EXECUTE_PHASE al canal de transmisión: {}", e);
             }
@@ -611,6 +649,11 @@ async fn handle_dom_snapshot(
         Err(err) => {
             eprintln!("[SpectreQA] Error crítico sanitizando la respuesta de la IA: {}", err);
             send_error(broadcast_tx, &format!("Error al parsear comandos: {}", err));
+            // Soltamos el lock antes de finish_session (que toma su propio lock
+            // sobre test_session) para no deadlockear. Mismo motivo que en el
+            // error de proveedor: sin esto, el próximo snapshot reintenta.
+            drop(session_guard);
+            finish_session(state, TestOutcome::Error).await;
         }
     }
 }
@@ -620,19 +663,62 @@ async fn handle_test_status_update(payload: &Value, state: &Arc<AppState>) {
         .get("status")
         .and_then(|v| v.as_str())
         .unwrap_or("UNKNOWN");
-    
-    println!("[SpectreQA] Prueba terminada con status: {}", status);
-    
-    let mut session = state.test_session.lock().await;
-    if let Some(sess) = session.as_ref() {
-        if !sess.is_navigating {
-            *session = None;
-        } else {
-            println!("[SpectreQA] Ignorando limpieza de sesión durante navegación");
+    let flag = payload
+        .get("flag")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    println!("[SpectreQA] TEST_STATUS_UPDATE recibido: status={}, flag={}", status, flag);
+
+    match status {
+        "ORCHESTRATOR_LOST" => {
+            handle_orchestrator_lost(state).await;
         }
-    } else {
-        *session = None;
+        "TEST_SUCCESS" => {
+            println!("[SpectreQA] Prueba terminada con ÉXITO.");
+            finish_session(state, TestOutcome::Success).await;
+        }
+        "TEST_ERROR" => {
+            println!("[SpectreQA] Prueba terminada con ERROR.");
+            finish_session(state, TestOutcome::Error).await;
+        }
+        // WAIT y PAUSE de la extensión llegan aquí como "WAITING"/"PAUSED": son
+        // pausas intencionales, no un fin de sesión. Se marca is_async_waiting
+        // para que el watchdog no la mate por inactividad mientras dure.
+        "WAITING" | "PAUSED" => {
+            let mut session_guard = state.test_session.lock().await;
+            if let Some(session) = session_guard.as_mut() {
+                session.is_async_waiting = true;
+                println!("[SpectreQA] Sesión en espera controlada ({}). Watchdog inhibido.", status);
+            }
+        }
+        "RUNNING" => {
+            let mut session_guard = state.test_session.lock().await;
+            if let Some(session) = session_guard.as_mut() {
+                session.is_async_waiting = false;
+                session.mark_phase_sent(); // resetea el reloj del watchdog al reanudar
+                println!("[SpectreQA] Sesión reanudada. Watchdog reactivado.");
+            }
+        }
+        other => {
+            // Antes: cualquier status no reconocido limpiaba la sesión entera.
+            // Ahora: se ignora. Terminar la sesión debe ser explícito
+            // (TEST_SUCCESS / TEST_ERROR / ORCHESTRATOR_LOST / TEST_TERMINATED),
+            // no el comportamiento por defecto de un status desconocido.
+            println!("[SpectreQA] TEST_STATUS_UPDATE con status no reconocido: '{}'. Se ignora.", other);
+        }
     }
+}
+
+/// Detención voluntaria: el usuario le dio click a "Detener" en la extensión.
+async fn handle_test_terminated(payload: &Value, state: &Arc<AppState>) {
+    let reason = payload
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Sin razón especificada");
+
+    println!("[SpectreQA] Prueba detenida por el usuario: {}", reason);
+    finish_session(state, TestOutcome::Terminated).await;
 }
 
 fn send_error(broadcast_tx: &Arc<Sender>, message: &str) {

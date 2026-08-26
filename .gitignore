@@ -28,3 +28,6 @@ bundle_codebase.py
 codigo_completo.txt
 codigo_completo_antiguo.txt
 unbundle_codebase.py
+
+*.py
+*.md

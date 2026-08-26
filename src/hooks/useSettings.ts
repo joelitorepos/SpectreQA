@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { load, Store } from '@tauri-apps/plugin-store';
 import { invoke } from '@tauri-apps/api/core';
 
-export type AIProvider = 'ollama';
+export type AIProvider = 'ollama' | 'spectreqa_cloud';
 
 export interface AIConfig {
   provider: AIProvider;
@@ -78,12 +78,13 @@ export const useSettings = () => {
  */
 async function syncAiConfig(config: AIConfig): Promise<void> {
   try {
-    const mode = config.provider === 'ollama' ? 'local' : 'cloud';
+    const mode = config.provider === 'spectreqa_cloud' ? 'cloud' : 'local';
     console.log('[Settings] Sincronizando con Rust:', { mode, model: config.model, baseUrl: config.baseUrl });
     await invoke('set_ai_config', {
       mode: mode,
       model: config.model,
       baseUrl: config.baseUrl,
+      apiKey: config.apiKey, // antes no se mandaba — set_ai_config lo requiere para modo cloud
     });
     console.log('[Settings] Sincronización exitosa');
   } catch (e) {
@@ -92,13 +93,39 @@ async function syncAiConfig(config: AIConfig): Promise<void> {
 }
 
 /**
- * Prueba de conexión con Ollama (usa el mismo endpoint que el backend)
+ * Prueba de conexión. Ollama: llamada real de generación (mismo endpoint
+ * que usa Rust). Cloud: valida la key de verdad contra /execute/quota — si
+ * la key es inválida/revocada, el backend responde 401 acá mismo (antes
+ * solo se pingeaba /health, que ni siquiera requiere auth, así que nunca
+ * confirmaba si la key era válida).
  */
 export async function callAI(
   config: AIConfig,
   systemPrompt: string,
   userMessage: string,
 ): Promise<string> {
+  if (config.provider === 'spectreqa_cloud') {
+    if (!config.apiKey.trim()) throw new Error('Falta la API key');
+
+    const res = await fetch(`${config.baseUrl}/api/v1/execute/quota`, {
+      headers: { Authorization: `Bearer ${config.apiKey}` },
+    });
+
+    if (res.status === 401) throw new Error('API key inválida o revocada');
+    if (!res.ok) {
+      const errorBody = await res.json().catch(() => ({}));
+      const detail = errorBody.detail ? ` — ${errorBody.detail}` : '';
+      throw new Error(`Backend respondió ${res.status}${detail}`);
+    }
+
+    const data = await res.json();
+    // El backend devuelve monthlyLimit (mismo valor que dailyLimit, que se
+    // mantiene solo por retrocompatibilidad — ver quota.service.ts). La
+    // cuota es mensual y apilable desde el rediseño de subscriptions, no
+    // diaria; usageDate ya viene en formato 'YYYY-MM', no un día puntual.
+    return `Cuota: ${data.phasesUsed}/${data.monthlyLimit} fases usadas este mes`;
+  }
+
   const baseUrl = config.baseUrl;
   const res = await fetch(`${baseUrl}/api/generate`, {
     method: 'POST',

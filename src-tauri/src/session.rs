@@ -1,6 +1,6 @@
 // src-tauri/src/session.rs
 
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -17,13 +17,71 @@ pub struct PhaseRecord {
 }
 
 /**
- * Estado posible de una sesión de prueba.
+ * Estado posible de una sesión de prueba (uso interno, mientras la sesión vive).
  */
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionStatus {
     Running,
     Finished,
     Error,
+}
+
+/**
+ * Por qué terminó una sesión. Esto es lo que se guarda en el log — a
+ * diferencia de SessionStatus (que es un detalle interno mientras la sesión
+ * vive), TestOutcome es el resultado final que le importa al usuario.
+ */
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TestOutcome {
+    Success,
+    Error,
+    Terminated,
+}
+
+impl TestOutcome {
+    /// Usado para nombrar el archivo del log: log_{timestamp}_{outcome}.json
+    pub fn as_filename_part(&self) -> &'static str {
+        match self {
+            TestOutcome::Success => "success",
+            TestOutcome::Error => "error",
+            TestOutcome::Terminated => "terminated",
+        }
+    }
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/**
+ * Lo que se guarda en disco al terminar una prueba (éxito, error, o detenida
+ * por el usuario). Contiene exactamente lo que pediste: número de fase,
+ * pensamiento de la IA y comandos usados por fase (Vec<PhaseRecord>, lo mismo
+ * que ya se usaba para el historial en memoria), más el resultado final.
+ */
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestLogEntry {
+    pub project_id: String,
+    pub outcome: TestOutcome,
+    pub started_at: u64,
+    pub finished_at: u64,
+    pub phases: Vec<PhaseRecord>,
+}
+
+/**
+ * Versión liviana de TestLogEntry para listar logs sin tener que abrir y
+ * parsear cada archivo JSON: toda esta info sale directo del nombre del
+ * archivo (log_{started_at}_{outcome}.json).
+ */
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestLogSummary {
+    pub log_id: String,
+    pub outcome: TestOutcome,
+    pub started_at: u64,
 }
 
 /**
@@ -39,7 +97,7 @@ pub struct TestSession {
     pub history: Vec<PhaseRecord>,
     pub last_dom: Option<Value>,
     pub status: SessionStatus,
-    /** Contador de reintentos cuando el DOM no cambia. Máximo 2. */
+    /** Solo para logging — la prueba termina en el primer DOM sin cambios, sin reintentos. */
     pub no_change_retries: u32,
     /** Última URL conocida para detectar navegación (login exitoso) */
     pub last_url: Option<String>,
@@ -49,6 +107,13 @@ pub struct TestSession {
     pub is_navigating: bool,
     pub last_navigation_time: Option<u64>,
     pub navigation_timeout_secs: u64,
+    /**
+     * Flag que indica si la sesión está en espera asíncrona controlada (ASYNC_WAIT).
+     * Cuando es true, el watchdog no debe actuar, ya que la pausa es intencional.
+     */
+    pub is_async_waiting: bool,
+    /** Marca de tiempo (unix, segundos) de cuándo se creó la sesión. Para el log. */
+    pub started_at: u64,
 }
 
 impl TestSession {
@@ -71,7 +136,23 @@ impl TestSession {
             // NUEVOS CAMPOS INICIALIZADOS
             is_navigating: false,
             last_navigation_time: None,
-            navigation_timeout_secs: 10, // 10 segundos máximo para navegación
+            navigation_timeout_secs: 30, // 30 segundos máximo para navegación
+            is_async_waiting: false,     // Inicialmente no está en espera asíncrona
+            started_at: now_unix(),
+        }
+    }
+
+    /**
+     * Arma el registro de log a partir de esta sesión y el resultado final.
+     * No toca disco: eso lo hace storage::save_test_log con lo que devuelve esto.
+     */
+    pub fn to_log_entry(&self, outcome: TestOutcome) -> TestLogEntry {
+        TestLogEntry {
+            project_id: self.project_id.clone(),
+            outcome,
+            started_at: self.started_at,
+            finished_at: now_unix(),
+            phases: self.history.clone(),
         }
     }
 
@@ -92,8 +173,10 @@ impl TestSession {
     }
 
     /**
-     * Registra un intento fallido por DOM sin cambios.
-     * Devuelve true si se superó el límite de reintentos (2).
+     * Registra que el DOM no cambió respecto al snapshot anterior. Ya NO
+     * hay reintentos — un solo "sin cambios" termina la prueba con error
+     * (ver ws_server.rs::handle_dom_snapshot). Este contador queda solo
+     * para logging, no gatea ninguna decisión.
      */
     pub fn register_no_change(&mut self) -> bool {
         self.no_change_retries += 1;

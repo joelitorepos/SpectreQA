@@ -111,7 +111,6 @@ const ProjectsPage = () => {
             <ProjectCard
               key={project.id}
               project={project}
-              onDelete={setToDelete}
               onEdit={setToEdit}
               onOpenAgent={setAgentProject}
               onToggleAuditing={toggleAuditing}

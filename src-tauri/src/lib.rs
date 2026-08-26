@@ -13,26 +13,30 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 use tauri::Manager;
+use tauri_plugin_store::StoreExt;
 
 use session::TestSession;
 
 /**
  * Configuración de IA simplificada para SpectreQA.
- * Solo dos modos: local (Ollama) o cloud (servicio FAST).
+ * Solo dos modos: local (Ollama) o cloud (backend real de SpectreQA).
  */
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AIConfig {
-    pub mode: String,     // "local" | "cloud"
-    pub model: String,    // Solo usado en modo local (ej: "llama3.2")
-    pub base_url: String, // Local: "http://localhost:11434", Cloud: "https://fast-api.example.com"
+    pub mode:     String, // "local" | "cloud"
+    pub model:    String, // Solo usado en modo local (ej: "llama3.2")
+    pub base_url: String, // Local: "http://localhost:11434", Cloud: "https://app.spectreqa.com"
+    /** Solo usado en modo cloud — la API key generada en el dashboard. */
+    pub api_key:  String,
 }
 
 impl Default for AIConfig {
     fn default() -> Self {
         Self {
-            mode: "local".to_string(),
-            model: "llama3.2".to_string(),
+            mode:     "local".to_string(),
+            model:    "llama3.2".to_string(),
             base_url: "http://localhost:11434".to_string(),
+            api_key:  String::new(),
         }
     }
 }
@@ -66,21 +70,53 @@ fn projects_base(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 /**
- * Recibe la configuración de IA desde React.
- * Modo local: solo model + base_url (Ollama)
- * Modo cloud: solo base_url (servicio FAST)
+ * Recibe la configuración de IA desde React y la persiste a disco
+ * (settings.json vía tauri_plugin_store), así sobrevive a reinicios de la
+ * app — antes solo vivía en el Mutex en memoria y se perdía al cerrar.
+ * Modo local: model + base_url (Ollama). Modo cloud: base_url + api_key.
  */
 #[tauri::command]
 async fn set_ai_config(
+    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     mode: String,
     model: String,
     base_url: String,
+    api_key: Option<String>, // Option: compatibilidad con llamadas que no lo mandan (modo local)
 ) -> Result<(), String> {
-    let mut config = state.ai_config.lock().await;
+    let api_key = api_key.unwrap_or_default();
     println!("[SpectreQA] Modo IA: {}, modelo: {}, URL: {}", mode, model, base_url);
-    *config = AIConfig { mode, model, base_url };
+
+    let new_config = AIConfig {
+        mode: mode.clone(),
+        model: model.clone(),
+        base_url: base_url.clone(),
+        api_key: api_key.clone(),
+    };
+
+    {
+        let mut config = state.ai_config.lock().await;
+        *config = new_config;
+    }
+
+    let store = app.store("settings.json").map_err(|e| e.to_string())?;
+    store.set("ai_mode", serde_json::json!(mode));
+    store.set("ai_model", serde_json::json!(model));
+    store.set("ai_base_url", serde_json::json!(base_url));
+    store.set("ai_api_key", serde_json::json!(api_key));
+    store.save().map_err(|e| e.to_string())?;
+
     Ok(())
+}
+
+/**
+ * Devuelve la config actual de IA al frontend — necesario para que la UI
+ * de configuración pueda mostrar el estado real al cargar, en vez de
+ * asumir siempre los defaults.
+ */
+#[tauri::command]
+async fn get_ai_config(state: tauri::State<'_, Arc<AppState>>) -> Result<AIConfig, String> {
+    Ok(state.ai_config.lock().await.clone())
 }
 
 /**
@@ -127,6 +163,35 @@ async fn send_to_extension(
 #[tauri::command]
 fn extension_connected() -> bool {
     ws_server::EXTENSION_CONNECTED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[tauri::command]
+async fn list_test_logs(
+    state: tauri::State<'_, Arc<AppState>>,
+    project_id: String,
+) -> Result<Vec<session::TestLogSummary>, String> {
+    let base = state.projects_base()?;
+    storage::list_test_logs(&base, &project_id)
+}
+
+#[tauri::command]
+async fn read_test_log(
+    state: tauri::State<'_, Arc<AppState>>,
+    project_id: String,
+    log_id: String,
+) -> Result<session::TestLogEntry, String> {
+    let base = state.projects_base()?;
+    storage::read_test_log(&base, &project_id, &log_id)
+}
+
+#[tauri::command]
+async fn delete_test_log(
+    state: tauri::State<'_, Arc<AppState>>,
+    project_id: String,
+    log_id: String,
+) -> Result<(), String> {
+    let base = state.projects_base()?;
+    storage::delete_test_log(&base, &project_id, &log_id)
 }
 
 #[tauri::command]
@@ -262,11 +327,24 @@ pub fn run() {
             let handle = app.handle().clone();
             let (tx, _rx) = broadcast::channel::<String>(32);
 
+            // Carga la config guardada de una sesión anterior, si existe.
+            // Si el store o alguna clave no existen todavía (primera vez que
+            // corre la app), cada campo cae a su default individual.
+            let store = app.store("settings.json")?;
+            let defaults = AIConfig::default();
+            let initial_ai_config = AIConfig {
+                mode: store.get("ai_mode").and_then(|v| v.as_str().map(String::from)).unwrap_or(defaults.mode),
+                model: store.get("ai_model").and_then(|v| v.as_str().map(String::from)).unwrap_or(defaults.model),
+                base_url: store.get("ai_base_url").and_then(|v| v.as_str().map(String::from)).unwrap_or(defaults.base_url),
+                api_key: store.get("ai_api_key").and_then(|v| v.as_str().map(String::from)).unwrap_or(defaults.api_key),
+            };
+            println!("[SpectreQA] Config de IA cargada: modo={}, model={}", initial_ai_config.mode, initial_ai_config.model);
+
             let app_state = Arc::new(AppState {
                 event_tx:          tx.clone(),
                 active_project_id: Mutex::new(None),
                 test_session:      Mutex::new(None),
-                ai_config:         Mutex::new(AIConfig::default()),
+                ai_config:         Mutex::new(initial_ai_config),
                 app_handle:        handle.clone(),
             });
 
@@ -283,6 +361,7 @@ pub fn run() {
             extension_connected,
             send_to_extension,
             set_ai_config,
+            get_ai_config,
             set_active_project,
             clear_active_project,
             create_agent_md,
@@ -290,6 +369,9 @@ pub fn run() {
             write_agent_md,
             delete_project_dir,
             run_project_commands,
+            list_test_logs,
+            read_test_log,
+            delete_test_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

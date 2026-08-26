@@ -5,6 +5,12 @@ import type { AIProvider, AIConfig } from '../hooks/useSettings';
 
 const SUGGESTED_MODELS: Record<AIProvider, string[]> = {
   ollama: ['llama3.2', 'llama3.1', 'mistral', 'gemma2', 'qwen2.5'],
+  spectreqa_cloud: [], // el backend decide el modelo (DeepSeek/Cerebras) — no aplica acá
+};
+
+const DEFAULT_BASE_URL: Record<AIProvider, string> = {
+  ollama: 'http://localhost:11434',
+  spectreqa_cloud: 'https://app.spectreqa.com',
 };
 
 const SettingsPage = () => {
@@ -14,6 +20,7 @@ const SettingsPage = () => {
   const [ollamaStatus, setOllamaStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [testState, setTestState] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
   const [testError, setTestError] = useState('');
+  const [testResult, setTestResult] = useState('');
 
   // Sincronizar form cuando carga el store
   useEffect(() => {
@@ -45,9 +52,11 @@ const SettingsPage = () => {
   const handleTest = async () => {
     setTestState('testing');
     setTestError('');
+    setTestResult('');
     try {
       const { callAI } = await import('../hooks/useSettings');
-      await callAI(form, 'Responde solo con "ok".', 'Test de conexión');
+      const result = await callAI(form, 'Responde solo con "ok".', 'Test de conexión');
+      setTestResult(result);
       setTestState('ok');
     } catch (e) {
       setTestState('error');
@@ -79,14 +88,32 @@ const SettingsPage = () => {
       {/* Proveedor */}
       <div className="flex flex-col gap-3">
         <label className="text-xs font-medium text-slate-600 uppercase tracking-wide">Proveedor</label>
-        <div className="flex">
-          <div className="flex items-center gap-4 py-4 px-5 rounded-2xl border border-[#534AB7] bg-[#534AB7]/5 max-w-sm w-full">
+        <div className="flex gap-3">
+          <button
+            onClick={() => setForm({ ...form, provider: 'ollama', baseUrl: DEFAULT_BASE_URL.ollama })}
+            className={`flex items-center gap-4 py-4 px-5 rounded-2xl border max-w-sm w-full text-left transition ${
+              form.provider === 'ollama' ? 'border-[#534AB7] bg-[#534AB7]/5' : 'border-slate-200 hover:border-slate-300'
+            }`}
+          >
             <span className="text-3xl">🦙</span>
             <div className="flex flex-col">
-              <span className="text-sm font-semibold text-[#534AB7]">Ollama</span>
+              <span className={`text-sm font-semibold ${form.provider === 'ollama' ? 'text-[#534AB7]' : 'text-slate-700'}`}>Ollama</span>
               <span className="text-xs text-slate-500 mt-0.5">Modelos locales integrados sin necesidad de API Key.</span>
             </div>
-          </div>
+          </button>
+
+          <button
+            onClick={() => setForm({ ...form, provider: 'spectreqa_cloud', baseUrl: DEFAULT_BASE_URL.spectreqa_cloud })}
+            className={`flex items-center gap-4 py-4 px-5 rounded-2xl border max-w-sm w-full text-left transition ${
+              form.provider === 'spectreqa_cloud' ? 'border-[#534AB7] bg-[#534AB7]/5' : 'border-slate-200 hover:border-slate-300'
+            }`}
+          >
+            <span className="text-3xl">☁️</span>
+            <div className="flex flex-col">
+              <span className={`text-sm font-semibold ${form.provider === 'spectreqa_cloud' ? 'text-[#534AB7]' : 'text-slate-700'}`}>SpectreQA Cloud</span>
+              <span className="text-xs text-slate-500 mt-0.5">Más rápido y preciso — requiere API key del dashboard.</span>
+            </div>
+          </button>
         </div>
       </div>
 
@@ -112,6 +139,21 @@ const SettingsPage = () => {
         </div>
       )}
 
+      {/* API Key (solo cloud) */}
+      {form.provider === 'spectreqa_cloud' && (
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-medium text-slate-600">API Key</label>
+          <input
+            type="text"
+            value={form.apiKey}
+            onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+            placeholder="Pega tu API key del dashboard"
+            className="text-sm font-mono px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-slate-800 focus:outline-none focus:border-[#534AB7] transition"
+          />
+          <span className="text-xs text-slate-400">La generas en el dashboard, dentro de tu cuenta.</span>
+        </div>
+      )}
+
       {/* Ollama base URL */}
       {form.provider === 'ollama' && (
         <div className="flex flex-col gap-1.5">
@@ -127,7 +169,8 @@ const SettingsPage = () => {
 
 
 
-      {/* Modelo */}
+      {/* Modelo — no aplica en modo cloud, el backend decide qué modelo usar */}
+      {form.provider === 'ollama' && (
       <div className="flex flex-col gap-1.5">
         <label className="text-xs font-medium text-slate-600">Modelo</label>
         <div className="flex gap-2">
@@ -156,6 +199,7 @@ const SettingsPage = () => {
           ))}
         </div>
       </div>
+      )}
 
       {/* Test + Save */}
       <div className="flex items-center gap-3 pt-2">
@@ -168,7 +212,9 @@ const SettingsPage = () => {
         </button>
 
         {testState === 'ok' && (
-          <span className="text-sm text-emerald-600 font-medium">Conexión exitosa ✓</span>
+          <span className="text-sm text-emerald-600 font-medium">
+            {form.provider === 'spectreqa_cloud' && testResult ? testResult : 'Conexión exitosa ✓'}
+          </span>
         )}
         {testState === 'error' && (
           <span className="text-sm text-red-500 truncate max-w-xs" title={testError}>
