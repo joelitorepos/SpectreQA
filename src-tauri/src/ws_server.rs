@@ -527,17 +527,32 @@ async fn handle_dom_snapshot(
             "[SpectreQA] DOM sin cambios en Fase {}. Terminando (sin reintentos).",
             current_phase
         );
+        let no_change_message = "El DOM no cambió respecto al snapshot anterior.";
         let msg = json!({
             "type": "EXECUTE_PHASE",
             "payload": {
                 "phase": current_phase,
-                "thought": "El DOM no cambió respecto al snapshot anterior.",
+                "thought": no_change_message,
                 "status": "ERROR_NO_CHANGE",
                 "commands": [],
                 "actions": []
             }
         });
         let _ = broadcast_tx.send(msg.to_string());
+
+        // Antes este mensaje solo se mandaba por broadcast (se veía en
+        // pantalla y desaparecía) — nunca quedaba en session.history, así
+        // que el log de la prueba terminaba con 0 fases registradas
+        // ("Esta prueba terminó sin registrar fases."), sin ninguna pista
+        // de qué pasó. Ahora se guarda como la última fase del log.
+        session.add_phase(PhaseRecord {
+            phase: current_phase,
+            thought: no_change_message.to_string(),
+            status: "ERROR_NO_CHANGE".to_string(),
+            commands: vec![],
+            message: Some(no_change_message.to_string()),
+        });
+
         drop(session_guard);
         finish_session(state, TestOutcome::Error).await;
         return;
@@ -592,7 +607,28 @@ async fn handle_dom_snapshot(
             // indefinidamente, sin backoff, gastando cuota real en cada vuelta.
             // finish_session() limpia la sesión: el próximo DOM_SNAPSHOT ya no
             // encuentra sesión activa y se corta ahí, sin tocar al proveedor.
-            send_error(broadcast_tx, &format!("Error con el proveedor de IA: {}", e));
+            let error_message = format!("Error con el proveedor de IA: {}", e);
+            send_error(broadcast_tx, &error_message);
+
+            // Mismo motivo que en el caso de DOM sin cambios: sin esto, la
+            // sesión termina con el historial tal cual estaba antes del
+            // error (o vacío, si el error ocurrió en la fase 0 — justo el
+            // caso del 429 de cuota) y el log no deja ningún rastro de por
+            // qué terminó. Re-adquirimos el lock porque se soltó (drop
+            // más arriba) antes de llamar a call_ai.
+            {
+                let mut session_guard = state.test_session.lock().await;
+                if let Some(session) = session_guard.as_mut() {
+                    session.add_phase(PhaseRecord {
+                        phase: current_phase,
+                        thought: error_message.clone(),
+                        status: "ERROR_AI_PROVIDER".to_string(),
+                        commands: vec![],
+                        message: Some(error_message),
+                    });
+                }
+            }
+
             finish_session(state, TestOutcome::Error).await;
             return;
         }
@@ -618,6 +654,9 @@ async fn handle_dom_snapshot(
                 thought: parsed.thought.clone(),
                 status: parsed.status.clone(),
                 commands: parsed.commands.clone(),
+                // Fase normal, sin mensaje especial que reportar — el
+                // campo queda None y no se serializa (skip_serializing_if).
+                message: None,
             });
 
             let next_phase = current_phase + 1;

@@ -51,6 +51,16 @@ const Sidebar = () => {
             </svg>
           }
         />
+        <NavButton
+          to="docs"
+          label="Documentación"
+          icon={
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+            </svg>
+          }
+        />
       </nav>
 
       {/* Extension status */}
@@ -94,6 +104,17 @@ const Sidebar = () => {
           </div>
         </div>
       )}
+      {/* Link a la página oficial */}
+      <div className="px-3 pb-4">
+        <a
+          href="https://app.spectreqa.com"
+          target="_blank"
+          rel="noreferrer"
+          className="flex items-center justify-center gap-1.5 text-[11px] text-slate-400 hover:text-[#534AB7] transition py-1.5"
+        >
+          spectreqa.com ↗
+        </a>
+      </div>
     </aside>
   );
 };

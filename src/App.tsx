@@ -17,6 +17,7 @@ import AppLayout from './components/layout/AppLayout';
 import ProjectsPage from './pages/ProjectPage';
 import SettingsPage from './pages/SettingsPage';
 import LogsPage from './pages/LogsPage';
+import DocsPage from './pages/DocsPage';
 import { useSettings } from './hooks/useSettings';
 
 const App = () => {
@@ -29,6 +30,7 @@ const App = () => {
           <Route index element={<ProjectsPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="logs" element={<LogsPage />} />
+          <Route path="docs" element={<DocsPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

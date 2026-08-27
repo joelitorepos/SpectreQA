@@ -14,6 +14,18 @@ pub struct PhaseRecord {
     pub thought: String,
     pub status: String,
     pub commands: Vec<String>,
+    /**
+     * Mensaje humano asociado a esta fase, cuando lo hay — el mismo texto
+     * que se manda por broadcast a la extensión (send_error, o el `message`
+     * de un evento de ciclo de vida como WAIT/TEST_COMPLETE). Antes ese
+     * texto solo se mostraba en pantalla y desaparecía; ahora, cuando la
+     * fase termina en algo que el usuario necesita poder leer después
+     * (DOM sin cambios, error del proveedor de IA, etc.), se guarda acá
+     * para que quede en el log de la prueba. None en fases normales sin
+     * nada especial que reportar — no todas las fases necesitan mensaje.
+     */
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 /**

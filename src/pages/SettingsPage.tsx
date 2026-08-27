@@ -10,7 +10,7 @@ const SUGGESTED_MODELS: Record<AIProvider, string[]> = {
 
 const DEFAULT_BASE_URL: Record<AIProvider, string> = {
   ollama: 'http://localhost:11434',
-  spectreqa_cloud: 'https://app.spectreqa.com',
+  spectreqa_cloud: 'https://spectreqa.com',
 };
 
 const SettingsPage = () => {
@@ -150,7 +150,18 @@ const SettingsPage = () => {
             placeholder="Pega tu API key del dashboard"
             className="text-sm font-mono px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-slate-800 focus:outline-none focus:border-[#534AB7] transition"
           />
-          <span className="text-xs text-slate-400">La generas en el dashboard, dentro de tu cuenta.</span>
+          <span className="text-xs text-slate-400">
+            La generas en el{' '}
+            <a
+              href="https://spectreqa.com/dashboard"
+              target="_blank"
+              rel="noreferrer"
+              className="text-[#534AB7] underline underline-offset-2 hover:opacity-80"
+            >
+              dashboard de la página oficial
+            </a>
+            , dentro de tu cuenta.
+          </span>
         </div>
       )}
 

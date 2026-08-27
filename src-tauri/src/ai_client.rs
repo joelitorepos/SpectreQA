@@ -205,7 +205,12 @@ async fn call_spectreqa_cloud(
         let hint = match status.as_u16() {
             401 => " (API key inválida o revocada — genera una nueva en el dashboard)",
             403 => " (sin acceso al servicio en la nube — revisa tu plan o acceso anticipado)",
-            429 => " (límite diario de fases alcanzado)",
+            // Antes decía "límite diario" — la cuota dejó de ser diaria,
+            // ahora es mensual y apilable (ver quota.service.ts en el
+            // backend). El texto detallado real (con los números exactos
+            // de consumo/techo) ya viene en `text` más abajo, tal cual lo
+            // arma quota.middleware.ts — este hint es solo un resumen corto.
+            429 => " (tu cuota ha alcanzado el techo máximo — puedes comprar un plan adicional o esperar a que tu prueba de acceso anticipado se restablezca)",
             _ => "",
         };
         return Err(format!("Backend de SpectreQA respondió {}{}: {}", status, hint, text));
