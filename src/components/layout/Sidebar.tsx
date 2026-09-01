@@ -107,7 +107,7 @@ const Sidebar = () => {
       {/* Link a la página oficial */}
       <div className="px-3 pb-4">
         <a
-          href="https://app.spectreqa.com"
+          href="https://spectreqa.com"
           target="_blank"
           rel="noreferrer"
           className="flex items-center justify-center gap-1.5 text-[11px] text-slate-400 hover:text-[#534AB7] transition py-1.5"
