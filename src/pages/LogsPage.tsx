@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useProjects } from '../hooks/useProjects';
 import { useTestLogs } from '../hooks/useTestLogs';
-import LogCard from '../components/logs/LogCard';
+import LogCard from '../components/logs_components/LogCard';
 
 const LogsPage = () => {
   const { projects, loading: loadingProjects } = useProjects();
