@@ -32,7 +32,7 @@ const WATCHDOG_INTERVAL_SECONDS: u64 = 5;
 
 // [DEBUG] Cambiar a true para permitir cualquier extensión (modo pruebas)
 // Cambiar a false para modo producción (solo extensión oficial)
-const IS_DEBUG: bool = true;
+const IS_DEBUG: bool = false;
 
 pub static EXTENSION_CONNECTED: AtomicBool = AtomicBool::new(false);
 
