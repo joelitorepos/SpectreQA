@@ -10,7 +10,7 @@ const SUGGESTED_MODELS: Record<AIProvider, string[]> = {
 
 const DEFAULT_BASE_URL: Record<AIProvider, string> = {
   ollama: 'http://localhost:11434',
-  spectreqa_cloud: 'https://spectreqa.com',
+  spectreqa_cloud: 'https://app.spectreqa.com',
 };
 
 const SettingsPage = () => {
