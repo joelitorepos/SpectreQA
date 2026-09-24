@@ -24,7 +24,7 @@ use crate::command_parser;
 
 const BASE_PORT: u16 = 9999;
 const MAX_PORT_TRIES: u16 = 10;
-const ALLOWED_EXTENSION_ID: &str = "";
+const ALLOWED_EXTENSION_ID: &str = "eonjhhhdhlmlhbcmccenadolnkpingpb";
 
 // Constantes para el timeout
 const SESSION_TIMEOUT_SECONDS: u64 = 60;
