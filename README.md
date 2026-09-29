@@ -6,74 +6,92 @@
 [![React](https://img.shields.io/badge/React-v19-61dafb?style=flat&logo=react&logoColor=black)](https://react.dev/)
 [![Chrome Web Store](https://img.shields.io/badge/Chrome_Web_Store-SpectreQA-4285F4?style=flat&logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/spectreqa/eonjhhhdhlmlhbcmccenadolnkpingpb)
 
-**SpectreQA** es un ecosistema de automatización de pruebas de extremo a extremo (E2E) e interacción web impulsado por Inteligencia Artificial. Mediante una arquitectura híbrida compuesta por una aplicación de escritorio ligera (Tauri + React), una extensión de navegador y soporte para LLMs (nube o locales), SpectreQA audita y valida flujos interactivos complejos en aplicaciones web basándose en instrucciones de lenguaje natural (*prompts*).
+English | [Leer en Español](README.es.md)
+
+**SpectreQA** is an AI-powered ecosystem for automated end-to-end (E2E) web testing and interaction. Built on a hybrid architecture combining a lightweight desktop application (Tauri + React), a browser extension, and LLM integrations (cloud or local), SpectreQA audits and validates complex interactive user flows in web applications using natural language prompts.
 
 ---
 
-## 🛠️ Requisitos e Instalación
+## 🛠️ Prerequisites & Installation
 
-Para utilizar SpectreQA necesitas:
+To use SpectreQA, you will need:
 
-1. **La Aplicación de Escritorio:** Descarga el binario compilado o compílalo desde este repositorio.
-2. **La Extensión para el Navegador:** Disponible directamente en la **Chrome Web Store**:  
-   🔗 [Instalar SpectreQA Extension](https://chromewebstore.google.com/detail/spectreqa/eonjhhhdhlmlhbcmccenadolnkpingpb)
-3. *(Opcional)* **Ollama:** Si prefieres procesar las pruebas de forma 100% privada ejecutando modelos de lenguaje locales en tu máquina, instala [Ollama](https://ollama.com/) y asegúrate de tenerlo iniciado.
+1. **Desktop Application:** Download the compiled binary or build it directly from this repository.
+2. **Browser Extension:** Available directly on the **Chrome Web Store**:  
+   🔗 [Install SpectreQA Extension](https://chromewebstore.google.com/detail/spectreqa/eonjhhhdhlmlhbcmccenadolnkpingpb)
+3. *(Optional)* **Ollama:** If you prefer running 100% local language models on your machine for private testing, install [Ollama](https://ollama.com/) and ensure it is running in the background.
 
 ---
 
-## 🚀 Comandos de Desarrollo y Compilación
+## 🚀 Development & Build Commands
 
-Este proyecto utiliza **Bun** como entorno de ejecución y gestor de paquetes.
+This project uses **Bun** as its runtime and package manager.
 
-### Modo desarrollo (Frontend en navegador)
+### Development Mode (Frontend in Browser)
 ```bash
 bun run dev
+
 ```
 
-### Ejecutar App de Escritorio (Modo Desarrollo)
-Levanta la ventana nativa de Tauri con *Hot Reload*:
+### Run Desktop App (Development Mode)
+
+Launches the native Tauri window with Hot Reloading enabled:
+
 ```bash
 bun run tauri dev
+
 ```
 
-### Crear instaladores de producción
-Genera los binarios empaquetados optimizados para distribución:
+### Production Build
+
+Generates optimized distribution binaries:
+
 ```bash
 bun run tauri build
+
 ```
 
-- **Linux (Debian/Ubuntu/Mint):** Genera paquetes `.deb` e imagen binaria en:
-  ```bash
-  cd src-tauri/target/release/bundle/deb/
-  sudo apt install ./SpectreQA_0.1.0_amd64.deb
-  ```
+* **Linux (Debian/Ubuntu/Mint):** Generates `.deb` packages and binary images in:
+```bash
+cd src-tauri/target/release/bundle/deb/
+sudo apt install ./SpectreQA_0.1.0_amd64.deb
 
-- **Windows:** Genera un instalador ejecutable (`.exe` / `.msi`) en:
-  ```text
-  src-tauri\target\release\bundle\nsis\
-  ```
+```
 
----
 
-## 💻 Guía de Uso paso a paso
+* **Windows:** Generates an executable installer (`.exe` / `.msi`) in:
+```text
+src-tauri\target\release\bundle\nsis\
 
-### 1. Registrar un Proyecto
-Al abrir SpectreQA, registra el entorno de la aplicación web que deseas probar:
-* **Entorno Público / Producción:** Ingresa el Nombre y la URL pública (ej. `https://mi-app.com`).
-* **Entorno Local:** Ingresa el Nombre, Host/Puerto (ej. `http://localhost:3000`), la ruta raíz en tu disco y el comando para iniciarlo (ej. `npm run dev`).
+```
 
-### 2. Definir el Objetivo de la Prueba (*Prompt*)
-* Pasa el cursor sobre la tarjeta del proyecto en SpectreQA y haz clic en el ícono de configuración/archivo.
-* Redacta el **prompt** con las instrucciones detalladas para la IA sobre qué elementos validar, hacer clic, llenar formularios o probar dentro del sitio.
 
-### 3. Ejecución con la Extensión
-* Haz clic sobre la tarjeta de tu proyecto para abrir la URL configurada en el navegador.
-* Abre el popup de la extensión de SpectreQA en la barra del navegador y selecciona **"Activar SpectreQA en esta pestaña"**.
-* **Capa de Control "Glass":** La extensión recubrirá la pestaña con una capa transparente (*overlay*) para gestionar los eventos de la IA y evitar interferencias manuales accidentales durante el testeo.
-* Utiliza el menú flotante para **Iniciar ▶️**, **Pausar ⏸️** o **Detener ⏹️** la ejecución de la prueba autónoma.
 
 ---
 
-## ⚖️ Licencia
+## 💻 Step-by-Step Usage Guide
 
-Este proyecto está licenciado bajo la licencia **GNU Affero General Public License v3.0 (AGPLv3)**. Consulta el archivo `LICENSE` para más detalles.
+### 1. Registering a Project
+
+Upon launching SpectreQA, configure the environment for the web application you want to test:
+
+* **Public / Production Environment:** Enter a Project Name and its public URL (e.g., `https://my-app.com`).
+* **Local Environment:** Enter a Project Name, Host/Port (e.g., `http://localhost:3000`), the absolute path to your project's root folder, and the start command (e.g., `npm run dev`).
+
+### 2. Defining the Test Objective (*Prompt*)
+
+* Hover over the project card in SpectreQA and click the configuration/file icon.
+* Write a detailed **prompt** specifying what the AI should validate, click, fill in forms, or test within the site.
+
+### 3. Execution via Browser Extension
+
+* Click on your project card to launch the configured URL in your browser.
+* Open the SpectreQA extension popup in your browser toolbar and click **"Activate SpectreQA on this tab"**.
+* **Glass Control Layer:** The extension overlays a transparent control layer over the webpage to handle AI actions and prevent accidental manual interactions during the test.
+* Use the floating menu to **Start ▶️**, **Pause ⏸️**, or **Stop ⏹️** autonomous test execution.
+
+---
+
+## ⚖️ License
+
+This project is licensed under the **GNU Affero General Public License v3.0 (AGPLv3)**. See the `LICENSE` file for details.
